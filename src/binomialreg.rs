@@ -1,5 +1,5 @@
 // use std::iter::zip;
-use rustbustools::utils;
+use rustbustools::utils::{self, get_progressbar};
 
 
 fn logfactorial(x: usize) -> f64{
@@ -7,6 +7,7 @@ fn logfactorial(x: usize) -> f64{
 }
 
 fn log_binomial_coeff(n: usize, k: usize) -> f64{
+    // this function is RIDICULOUSLY SLOW!!!
     logfactorial(n) - logfactorial(k) - logfactorial(n-k)
 }
 
@@ -57,6 +58,8 @@ fn logspace(logmin: f64, logmax:f64, n:usize)-> Vec<f64> {
 
 
 use itertools::izip;
+use statrs::distribution::Binomial;
+use statrs::distribution::Discrete;
 
 pub fn phantom_binomial_regression(z: &[usize], mr: &[usize], r:&[usize], s: usize) -> (f64, Vec<f64>, Vec<f64>){
     // z is the number of non-chimeric molecules at aplification r
@@ -77,7 +80,11 @@ pub fn phantom_binomial_regression(z: &[usize], mr: &[usize], r:&[usize], s: usi
     // add 1: not possible atm, as the likelihood will eval to nan
     // prange.push(1.0);
 
-    let mut loglike_range: Vec<f64> = Vec::new();
+    let mut loglike_range: Vec<f64> = Vec::with_capacity(n);
+
+    let bar = get_progressbar(n as u64);
+
+
     for p in prange.iter(){
         // println!("p {} =====================================", p);
 
@@ -90,13 +97,20 @@ pub fn phantom_binomial_regression(z: &[usize], mr: &[usize], r:&[usize], s: usi
             // but a transformed version -> p_binomial
             let correction_factor = (s_f64-1.0)* ((1.0-p)/(s_f64-1.0)).powf(ri_f64);
 
-            let p_binomial = p.powf(ri_f64) + correction_factor;
-            let loglike_inc = binomial_loglike(*zi, *mri, p_binomial);
+            let mut p_binomial = p.powf(ri_f64) + correction_factor;
+            if p_binomial > 1.0{
+                p_binomial= 1.0;
+            }
+            let b_rv = Binomial::new(p_binomial, *mri as u64).unwrap_or_else(|_| panic!("p {} n {}", p_binomial, n));
+            let loglike_inc = b_rv.ln_pmf(*zi as u64);
 
+            // let loglike_inc = binomial_loglike(*zi, *mri, p_binomial);
+            // println!("{},{}", loglike_inc2, loglike_inc);
             // println!("p_binomial {}, ri {}, zi {}, mri {}, logp {}", p_binomial, ri, zi, mri, loglike_inc);
 
             loglike += loglike_inc;
         }
+        bar.inc(1);
         // println!("{}, {}", p, loglike);
         loglike_range.push(loglike);
     }
