@@ -39,21 +39,25 @@ struct PhantomCBArgs{
 
 #[derive(Args)]
 struct PhantomEstArgs{
-    #[clap()]
+    #[clap(long= "csv")]
     phantomcsv: String,
 }
 
 #[derive(Args)]
 struct PhantomFilterArgs{
-    #[clap()]
+    #[clap(long= "csv")]
     phantomcsv: String,
-    #[clap()]
-    infolders: Vec<String>,
-    #[clap()]
-    outfiles: Vec<String>,
+
+    #[clap(long= "infolders")]
+    infolders: String,
+    // infolders: Vec<String>,
+
+    #[clap(long= "outfiles")]
+    // outfiles: Vec<String>,
+    outfiles: String,
+
     #[clap(long= "t2g")] 
     t2g: String, 
-
 }
 
 fn main() {
@@ -87,20 +91,37 @@ fn main() {
         }
         MyCommand::phantomFilter(args) => {
 
+            let infolders: Vec<String> = args.infolders.split(' ').map(|x|x.to_string()).collect();
+            let outfiles: Vec<String> = args.outfiles.split(' ').map(|x|x.to_string()).collect();
+
+            println!("Infiles: {:?}",infolders);
+            println!("outfiles: {:?}",outfiles);
             let fph = phantompurger::FingerprintHistogram::from_csv(&args.phantomcsv);
+
+            println!("Building posterior");
             let posterior = phantompurger::PhantomPosterior::new(&fph);
-            let inputfolder_dict = args.infolders.iter()
+
+            println!("Building busfolder dicts");
+
+            let inputfolder_dict = infolders.iter()
                 .map(|b|(b.clone(),  BusFolder::new(&b, &args.t2g)))
                 .collect();
 
             let output_busfolders = izip!(
-                args.infolders.iter(), 
-                args.outfiles.iter()
+                infolders.iter(), 
+                outfiles.iter()
             )
             .map(|(name, outfile)|(name.clone(), outfile.clone()))
             .collect();
+
+            println!("Filering");
 
             posterior.filter_busfiles(inputfolder_dict, output_busfolders)
         }        
     }
 }
+
+/*
+cargo run --release -- --output /dev/null phantom-estimate --csv /home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv
+
+ */

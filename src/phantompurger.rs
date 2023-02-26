@@ -382,7 +382,7 @@ impl PhantomPosterior{
             let fps = create_fingerprint(&self.order, &record_dict, &ecmapper_dict);
 
             // if we get a record dict that turns into more than one fingerprint, just ignore
-            if fps.len() >1 {
+            if fps.len() !=1 {
                 continue
             }
             let fp = fps.first().unwrap();
