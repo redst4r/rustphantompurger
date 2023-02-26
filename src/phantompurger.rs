@@ -2,7 +2,8 @@
 use std::{collections::{HashMap, HashSet}, fs::File, io::{Write, BufReader, BufRead}, time::Instant, hash::Hash};
 use crate::{disjoint::{DisjointSubsets}, binomialreg::phantom_binomial_regression};
 use indicatif::{ProgressBar, ProgressStyle};
-use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::{BusRecord, BusFolder}, iterators::CbUmiIterator, utils::get_progressbar, consistent_genes::Ec2GeneMapper};
+use itertools::izip;
+use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::{BusRecord, BusFolder, BusWriter}, iterators::CbUmiIterator, utils::{get_progressbar, argsort::argmax_float}, consistent_genes::Ec2GeneMapper};
 
 
 #[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug,Copy)]
@@ -145,29 +146,14 @@ impl FingerprintHistogram{
     }
 
     pub fn add(&mut self, record_dict: HashMap<String, Vec<BusRecord>>, ecmapper_dict:&HashMap<String, &Ec2GeneMapper>){
+        // creates a fingerprint of the record_dict, updates the counts in the histogram
 
-        if self.drop_multimapped{
-            // filter out the cases where a CB/UMI has more than one EC
-            let filtered_dict: HashMap<String, BusRecord> = (record_dict).into_iter()
-                .filter(|(_k,v)| v.len()==1)
-                .map(|(k, v)| (k, v[0].clone())) // clone -> pop since we dont use vec after; not critical though
-                .collect();
+        let fingerprints = create_fingerprint(&self.order, &record_dict, ecmapper_dict);
 
-            // for rdict in groupby_gene_simple(filtered_dict, ecmapper_dict){
-            for rdict in groupby_gene_even_simpler(filtered_dict, ecmapper_dict){
-                let fp_hash = make_fingerprint_simple(&rdict);
-                
-                // turn the hashmap into a vector, sorted acc to order
-                let fp:  Vec<_>  = self.order.iter()
-                    .map(|s| fp_hash.get(s).unwrap_or(&0)).cloned().collect();
-
-                // update frequency
-                let v = self.histogram.entry(fp).or_insert(0);
-                *v += 1;
-            }
-        }
-        else{
-            panic!("not supported")
+        for fp in fingerprints{
+            // update frequency
+            let v = self.histogram.entry(fp).or_insert(0);
+            *v += 1;            
         }
     }
 
@@ -186,7 +172,7 @@ impl FingerprintHistogram{
         }
     }
 
-    pub fn estimate_SIHR(&self) -> f64{
+    pub fn estimate_sihr(&self) -> f64{
         // number of non-chimeric molecules of amp r
         let mut z_r: HashMap<usize, usize> = HashMap::new();
         
@@ -225,19 +211,63 @@ impl FingerprintHistogram{
 
     }
 
-    fn posterior(&self, fingerprint: Fingerprint) -> HashMap<String, f64>{
-        let n_samples = self.order.len() as f64;
-        let p = 1.0 - self.estimate_SIHR(); // the prop of not hopping
+}
+
+fn create_fingerprint(order: &[String], record_dict: &HashMap<String, Vec<BusRecord>>, ecmapper_dict:&HashMap<String, &Ec2GeneMapper>) -> Vec<Vec<u32>>{
+
+    // turns a record_dict into a fingerprint (an integer vector)
+    // a record_Dict can result in mutiple fingerprints if teh genes are inconsistent
+
+    let mut emission: Vec<Vec<u32>> = Vec::new();
+
+    // filter out the cases where a CB/UMI has more than one EC
+    let filtered_dict: HashMap<String, BusRecord> = (record_dict).iter()
+        .filter(|(_k,v)| v.len()==1)
+        .map(|(k, v)| (k.clone(), v[0].clone())) // clone -> pop since we dont use vec after; not critical though
+        .collect();
+
+    // for rdict in groupby_gene_simple(filtered_dict, ecmapper_dict){
+    for rdict in groupby_gene_even_simpler(filtered_dict, ecmapper_dict){
+        let fp_hash = make_fingerprint_simple(&rdict);
+        
+        // turn the hashmap into a vector, sorted acc to order
+        let fp:  Vec<_>  = order.iter()
+            .map(|s| fp_hash.get(s).unwrap_or(&0)).cloned().collect();
+
+        emission.push(fp);
+    }
+    emission
+}
+
+pub struct PhantomPosterior{
+    order: Vec<String>,
+    // posterior_cache: HashMap<Vec<u32>, Vec<f64>>,  // for each fingerprint a vector of posterior probs
+    pi_norm: HashMap<(AmpFactor, String), f64>,
+    p_no_hop: f64
+}
+
+impl PhantomPosterior{
+
+    pub fn new(fph: &FingerprintHistogram) -> Self{
+
+        let order: Vec<String> = fph.order.iter().cloned().collect();
+        let n_samples = order.len() as f64;
+        let p = 1.0-fph.estimate_sihr(); // the prop of not hopping
+
+        /*
+        Estimate the quantities needed for the posterior:
+        vr, vr_norm, pi_norm
+         */
 
         // v_rs: the molecular complexity profile of samples
         // for each sample/Amp factor, count the number of reads
         let mut vr: HashMap<(AmpFactor, String), u32> = HashMap::new();
-        for (fp, freq) in self.histogram.iter(){
+        for (fp, freq) in fph.histogram.iter(){
             let r = AmpFactor(fp.iter().sum());
             for (i, n_reads) in fp.iter().enumerate(){
                 // since we observed many of those (its a histogram)
                 let n_reads_total = (*n_reads) * (*freq as u32);
-                let key =(r, self.order[i].clone()); 
+                let key =(r, order[i].clone()); 
                 let v = vr.entry(key).or_insert(0);
                 *v+= n_reads_total
             }
@@ -261,24 +291,124 @@ impl FingerprintHistogram{
             .map(|((r, s), f)|
                 ((r, s), (f * (n_samples-1.0) + (p-1.0))/ (n_samples*p -1.0))
             )
-            .collect();
-        
-        let mut posterior: HashMap<String, f64> = HashMap::new();
-        for s in self.order.iter(){
-            let y = *fingerprint.get(s).unwrap();
-            let r = AmpFactor(fingerprint.values().sum());
+            .collect();        
 
-            let pi = *pi_norm.get(&(r, s.to_string())).unwrap();
-
-            let base = (n_samples-1.0)/((1.0/p) -1.0);
-            let post = base.powi(y as i32) * pi;
-            posterior.insert(s.to_string(), post);
+        // let posterior_cache = HashMap::new();
+        PhantomPosterior{
+            order,
+            pi_norm,  // for each fingerprint a vector of posterior probs
+            // posterior_cache,
+            p_no_hop: p
         }
-        let norm_constant: f64 = posterior.values().sum();
-        let posterior_normed: HashMap<String, f64> = posterior.into_iter().map(|(k,v)| (k, v/norm_constant)).collect();
+    }
+
+    fn posterior_internal(&self, fingerprint: &Vec<u32>) -> Vec<f64>{
+        let n_samples = self.order.len() as f64;
+
+        assert!(fingerprint.len()==self.order.len());
+
+        let r = AmpFactor(fingerprint.iter().sum());
+
+        let mut posterior: Vec<f64> = Vec::with_capacity(self.order.len());
+
+        for (sname, y) in izip![self.order.iter(), fingerprint.iter() ]{
+
+            let pi = *self.pi_norm.get(&(r, sname.to_string())).unwrap();
+
+            let base = (n_samples-1.0)/((1.0/ self.p_no_hop) -1.0);
+            let post = base.powi(*y as i32) * pi;
+            posterior.push(post);
+        }
+        let norm_constant: f64 = posterior.iter().sum();
+        let posterior_normed: Vec<f64> = posterior.into_iter().map(|v| (v/norm_constant)).collect();
         posterior_normed
     }
-}
+
+    pub fn posterior(&self, fingerprint: Fingerprint) -> HashMap<String, f64>{
+
+        let mut fp_numeric: Vec<u32> = Vec::with_capacity(self.order.len());
+        for s in self.order.iter(){
+            let y = match fingerprint.get(s){
+                Some(x) => x,
+                None => &0
+            };
+            fp_numeric.push(*y);
+        }
+        let posterior_numeric = self.posterior_internal(&fp_numeric);
+
+        let mut posterior_map: HashMap<String, f64> = HashMap::new();
+
+        for (sname,post) in izip![self.order.iter(), posterior_numeric.iter()]{
+            posterior_map.insert(sname.clone(), *post);
+        }
+        posterior_map
+    }
+
+
+    pub fn filter_busfiles(&self, input_busfolders: HashMap<String, BusFolder>, output_busfolders: HashMap<String, String>){
+        // for each fingerprint a vector of posterior probs
+        let mut posterior_cache: HashMap<Vec<u32>, Vec<f64>> = HashMap::new();  
+
+        // create the EC2gene mappers
+        let ecmapper_dict = input_busfolders.iter()
+        .map(|(samplename, bfolder)|
+            (samplename.clone(), &bfolder.ec2gene)   //#todo remove clone
+        ).collect();
+
+        // a list of busfile-names for the iterator
+        let busnames =input_busfolders.iter()
+            .map(|(s, bfolder)| (s.clone(), bfolder.get_busfile()))
+            .collect();
+    
+        let mut buswriters: HashMap<String,BusWriter> = output_busfolders.iter()
+            .map(|(sname, fname)| 
+                (
+                    sname.to_owned(), 
+                    BusWriter::new(
+                        &fname, 
+                        input_busfolders.get(sname).unwrap().get_bus_header()
+                    )
+                ) 
+            )
+            .collect();
+
+        let multi_iter = CellUmiIteratorMulti::new(&busnames);
+        let mut records_resolved = 0;
+        let mut records_total = 0;
+
+        for (_i,(_cb_umi, record_dict)) in multi_iter.enumerate(){
+            records_total += 1;
+
+            let fps = create_fingerprint(&self.order, &record_dict, &ecmapper_dict);
+
+            // if we get a record dict that turns into more than one fingerprint, just ignore
+            if fps.len() >1 {
+                continue
+            }
+            let fp = fps.first().unwrap();
+
+
+            if !posterior_cache.contains_key(fp){
+                let pvec = self.posterior_internal(fp);
+                posterior_cache.insert(fp.clone(), pvec);
+            }
+            let posterior_vec = posterior_cache.get(fp).unwrap();
+
+
+            let (ix, pmax) = argmax_float(posterior_vec);
+            let sample_max = self.order[ix].clone();
+            // if we find an unambiguous assignment, write the molecule to that sample
+            // otherwise drop the molecule in all samples
+            if pmax > 0.999999{
+                let wr = buswriters.get_mut(&sample_max).unwrap();
+                let r = record_dict.get(&sample_max).unwrap();
+                wr.write_records(r);
+                records_resolved+=1;
+            }
+        }
+        println!("{records_resolved}/{records_total} records corrected/written")
+    }
+}    
 
 pub fn make_fingerprint_histogram(busfolders: HashMap<String, BusFolder>) -> FingerprintHistogram{
     // main function here: takes a dict of busfolders, creates fingerprints for each molecule 
@@ -411,6 +541,7 @@ pub fn groupby_gene_even_simpler(record_dict: HashMap<String,BusRecord>, ecmappe
 pub mod tests{
     use std::collections::{HashSet, HashMap};
     use rustbustools::{consistent_genes::Ec2GeneMapper, io::{BusRecord, BusFolder}};
+    use statrs::assert_almost_eq;
     use super::{_make_fingerprint_histogram, make_fingerprint_simple, groupby_gene_even_simpler, FingerprintHistogram};
     use super::{make_fingerprint_histogram, detect_cell_overlap};
 
@@ -631,93 +762,70 @@ pub mod tests{
 
     #[test]
     pub fn test_csv_read_write(){
-        use rustbustools::io::setup_busfile;
 
-        // a pair, same EC
-        let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0};
-        let s1 = BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 3, FLAG: 0};
-        
-        // singleton in sample1
-        let r2 =BusRecord{CB: 1, UMI: 2, EC: 0, COUNT: 12, FLAG: 0}; 
-        
-        // singleton in sample2
-        let s2 = BusRecord{CB: 1, UMI: 2, EC: 1, COUNT: 10, FLAG: 0};
+        let order = vec!["s1", "s2"].into_iter().map(|x| x.to_string()).collect();
+        let mut histogram: HashMap<Vec<u32>, usize> = HashMap::new();
 
+        histogram.insert(
+            vec![1, 0],
+            1
+        );
+        histogram.insert(
+            vec![0, 1],
+            1
+        );
+        histogram.insert(
+            vec![1, 1],
+            1
+        );
 
-        // pair but only gene overlap
-        let r3 =BusRecord{CB: 1, UMI: 3, EC: 0, COUNT:  2, FLAG: 0}; 
-        let s3 = BusRecord{CB: 1, UMI: 3, EC: 2, COUNT:  3, FLAG: 0}; 
+        let fph = FingerprintHistogram {
+            order,
+            histogram,
+            drop_multimapped: true,
+        };
 
-        //overall we should get 
-        // [12, 0] = 1
-        // [0, 10] = 1
-        // [2, 3] = 2
+        fph.to_csv("/tmp/finger.csv");
 
-        let v1 = vec![r1.clone(),r2.clone(),r3.clone()];
-        let v2 = vec![s1.clone(),s2.clone(),s3.clone()];
-
-        // write the records to file
-        let (busname1, _dir1) =setup_busfile(&v1);
-        let (busname2, _dir2) =setup_busfile(&v2);
-
-        let hashmap = HashMap::from([
-            ("s1".to_string(), busname1.to_string()),
-            ("s2".to_string(), busname2.to_string())
-        ]);
-
-        let es1 = create_dummy_ec();
-        let es2 = create_dummy_ec();
-        let es_dict: HashMap<String, &Ec2GeneMapper> = vec![
-            ("s1".to_string(), &es1),
-            ("s2".to_string(), &es2)]
-            .into_iter().collect();
-
-        let s = _make_fingerprint_histogram(&hashmap, &es_dict);
-
-        s.to_csv("/tmp/finger.csv");
-
-        println!("{:?}", s);
+        println!("{:?}", fph);
         let t = FingerprintHistogram::from_csv("/tmp/finger.csv");
         println!("{:?}", t);
         
-        assert_eq!(s.histogram, t.histogram);
+        assert_eq!(fph.histogram, t.histogram);
 
-        let p = t.estimate_SIHR();
+        let p = t.estimate_sihr();
         println!("{}", p);
     }
 
     #[test]
-    pub fn test_estimate_SIHR(){
-        use rustbustools::io::setup_busfile;
-// 0.000010000099000984086
-        // a pair, same EC
-        let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0};
-        let s1 = BusRecord{CB: 0, UMI: 1, EC: 1, COUNT: 3, FLAG: 0};
-        
-        let v1 = vec![r1.clone()];
-        let v2 = vec![s1.clone()];
+    pub fn test_estimate_sihr(){
 
-        // write the records to file
-        let (busname1, _dir1) =setup_busfile(&v1);
-        let (busname2, _dir2) =setup_busfile(&v2); 
-        let hashmap = HashMap::from([
-            ("s1".to_string(), busname1.to_string()),
-            ("s2".to_string(), busname2.to_string())
-        ]);
+        let order = vec!["s1", "s2"].into_iter().map(|x| x.to_string()).collect();
+        let mut histogram: HashMap<Vec<u32>, usize> = HashMap::new();
 
-        let es1 = create_dummy_ec();
-        let es2 = create_dummy_ec();
-        let es_dict: HashMap<String, &Ec2GeneMapper> = vec![
-            ("s1".to_string(), &es1),
-            ("s2".to_string(), &es2)]
-            .into_iter().collect();
+        histogram.insert(
+            vec![1, 0],
+            1
+        );
+        histogram.insert(
+            vec![0, 1],
+            1
+        );
+        histogram.insert(
+            vec![1, 1],
+            1
+        );
 
-        let s = _make_fingerprint_histogram(&hashmap, &es_dict);
-        
-        let p = s.estimate_SIHR();
+        let fph = FingerprintHistogram {
+            order,
+            histogram,
+            drop_multimapped: true,
+        };
+
+        let p = fph.estimate_sihr();
         println!("{}", p);
 
-        assert!(p <  0.001);
+        assert_almost_eq!(p,  0.5, 0.001);
 
     }
 }
