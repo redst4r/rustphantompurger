@@ -1,8 +1,7 @@
-// use core::panic;
 use std::{collections::{HashMap, HashSet}, fs::File, io::{Write, BufReader, BufRead}, time::Instant, hash::Hash};
 use crate::{disjoint::{DisjointSubsets}, binomialreg::phantom_binomial_regression};
 use indicatif::{ProgressBar, ProgressStyle};
-use itertools::izip;
+use itertools::{izip, Itertools};
 use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::{BusRecord, BusFolder, BusWriter}, iterators::CbUmiIterator, utils::{get_progressbar, argsort::argmax_float}, consistent_genes::Ec2GeneMapper};
 
 
@@ -109,7 +108,6 @@ impl FingerprintHistogram{
 
     pub fn from_csv(filename: &str) -> Self{
         let fh = File::open(filename).unwrap();
-
         let mut samplenames: Vec<String> = Vec::new();
         let mut histogram: HashMap<Vec<u32>, usize> = HashMap::new();
         for (i, line) in BufReader::new(fh).lines().flatten().enumerate(){
@@ -133,7 +131,6 @@ impl FingerprintHistogram{
             histogram,
             drop_multimapped: true
         }
-
     }
 
     pub fn new(sample_order: &[String]) -> Self{
@@ -149,7 +146,6 @@ impl FingerprintHistogram{
         // creates a fingerprint of the record_dict, updates the counts in the histogram
 
         let fingerprints = create_fingerprint(&self.order, &record_dict, ecmapper_dict);
-
         for fp in fingerprints{
             // update frequency
             let v = self.histogram.entry(fp).or_insert(0);
@@ -161,7 +157,6 @@ impl FingerprintHistogram{
         let mut fh = File::create(outfile).unwrap();
         let mut header = self.order.join(",");
         header.push_str(",frequency");
-
         writeln!(fh, "{}", header).unwrap();
 
         for (fingerprint, freq) in self.histogram.iter(){
@@ -195,19 +190,23 @@ impl FingerprintHistogram{
         let mut r:Vec<usize> = m_r.iter().map(|(k, _v)| k.to_owned() as usize).collect();
         r.sort();
 
-        println!("r: {:?}", r);
-        println!("zr: {:?}", z_r);
-        println!("mr: {:?}", m_r);
-
-
         let z: Vec<usize> = r.iter().map(|x|*z_r.get(x).unwrap_or(&0)).collect();  // in case there's not a single non-chimeric molecule at amplification r, return 0
         let m: Vec<usize> = r.iter().map(|x|*m_r.get(x).unwrap()).collect();
 
-        println!("z: {:?}", z);
-        println!("m: {:?}", m);
+        // println!("r: {:?}", r);
+        // println!("zr: {:?}", z_r);
+        // println!("mr: {:?}", m_r);
+        // println!("z: {:?}", z);
+        // println!("m: {:?}", m);
 
         let (pmax, _prange, _loglike_range) = phantom_binomial_regression(&z,&m,&r, self.order.len());
-        1.0 - pmax
+        
+        let mut fh = File::create("/tmp/phat.csv").unwrap();
+        writeln!(fh, "p,logp").unwrap();
+        for (p, logp) in izip!(_prange, _loglike_range){
+            writeln!(fh, "{},{}", p, logp).unwrap();
+        }
+        pmax
 
     }
 
@@ -241,18 +240,21 @@ fn create_fingerprint(order: &[String], record_dict: &HashMap<String, Vec<BusRec
 
 pub struct PhantomPosterior{
     order: Vec<String>,
-    // posterior_cache: HashMap<Vec<u32>, Vec<f64>>,  // for each fingerprint a vector of posterior probs
     pi_norm: HashMap<(AmpFactor, String), f64>,
-    p_no_hop: f64
+    p_no_hop: f64,
+    vr_norm: HashMap<(AmpFactor, String), f64>
 }
 
 impl PhantomPosterior{
 
     pub fn new(fph: &FingerprintHistogram) -> Self{
 
-        let order: Vec<String> = fph.order.iter().cloned().collect();
+        let order: Vec<String> = fph.order.to_vec();
         let n_samples = order.len() as f64;
+
+        println!("Estimate SIHR");
         let p = 1.0-fph.estimate_sihr(); // the prop of not hopping
+        println!("1-SIHR {p}");
 
         /*
         Estimate the quantities needed for the posterior:
@@ -285,53 +287,95 @@ impl PhantomPosterior{
                 ((r, s), (v as f64) / (*norm_constant.get(&r).unwrap() as f64)))
             .collect();
 
-        // convert to pi_rs
+        // map_to_file(&vr_norm, "/tmp/vr_norm.csv");
+
+        // convert to pi_rs, Eq10 in Suppl
         let pi_norm: HashMap<(AmpFactor, String), f64> = vr_norm
-            .into_iter()
+            .iter()
             .map(|((r, s), f)|
-                ((r, s), (f * (n_samples-1.0) + (p-1.0))/ (n_samples*p -1.0))
+                ((*r, s.to_owned()), (f * (n_samples-1.0) + (p-1.0))/ (n_samples*p -1.0))
             )
-            .collect();        
+            // setting too small values to 1e-6
+            .map(|((r, s), f)|
+                ((r, s), if f>0.0 {f} else {1e-6})
+            )
+            .collect();      
+
+        // due to the clipping to 1e-6, we need to renorm such that pi_r ==1 
+        // "In empirical data, when this relationship is violated, we can set pi_rs = 10−6 and renormalize pi_r accordingly."
+
+        let mut normfactor: HashMap<AmpFactor,f64> = HashMap::new();
+        for ((r, _s), f) in pi_norm.iter(){
+            let v = normfactor.entry(*r).or_insert(0.0);
+            *v+=f;
+        }
+
+        let pi_renorm: HashMap<(AmpFactor, String), f64> = pi_norm.iter()
+            .map(|((r, s), f)| 
+                ((*r, s.clone()), f/normfactor.get(r).unwrap())
+            ).collect();
+
+        // map_to_file(&pi_renorm, "/tmp/pi_renorm.csv");
 
         // let posterior_cache = HashMap::new();
         PhantomPosterior{
             order,
-            pi_norm,  // for each fingerprint a vector of posterior probs
-            // posterior_cache,
-            p_no_hop: p
+            pi_norm: pi_renorm,  // for each fingerprint a vector of posterior probs
+            p_no_hop: p,
+            vr_norm
         }
     }
 
-    fn posterior_internal(&self, fingerprint: &Vec<u32>) -> Vec<f64>{
+    fn posterior_internal(&self, fingerprint: &[u32]) -> Vec<f64>{
+        // Page 22 in Suppl
         let n_samples = self.order.len() as f64;
 
         assert!(fingerprint.len()==self.order.len());
 
         let r = AmpFactor(fingerprint.iter().sum());
 
-        let mut posterior: Vec<f64> = Vec::with_capacity(self.order.len());
+        let linear = false;
 
-        for (sname, y) in izip![self.order.iter(), fingerprint.iter() ]{
-
-            let pi = *self.pi_norm.get(&(r, sname.to_string())).unwrap();
-
+        if linear{
+            panic!("creates overflows!");
+            let mut posterior: Vec<f64> = Vec::with_capacity(self.order.len());
             let base = (n_samples-1.0)/((1.0/ self.p_no_hop) -1.0);
-            let post = base.powi(*y as i32) * pi;
-            posterior.push(post);
+
+            for (sname, y) in izip![self.order.iter(), fingerprint.iter() ]{
+
+                let pi = *self.pi_norm.get(&(r, sname.to_string())).unwrap_or_else(|| panic!("Unknown {} {}", sname,r.0));
+                let post = base.powi(*y as i32) * pi;
+                posterior.push(post);
+            }
+            let norm_constant: f64 = posterior.iter().sum();
+            let posterior_normed: Vec<f64> = posterior.iter().map(|v| (v/norm_constant)).collect();
+            posterior_normed
         }
-        let norm_constant: f64 = posterior.iter().sum();
-        let posterior_normed: Vec<f64> = posterior.into_iter().map(|v| (v/norm_constant)).collect();
-        posterior_normed
+        else{ // log posterior, preventing overflows
+
+            let mut logposterior: Vec<f64> = Vec::with_capacity(self.order.len());
+            let logbase = (n_samples-1.0).ln() - ((1.0/ self.p_no_hop) -1.0).ln();
+            for (sname, y) in izip![self.order.iter(), fingerprint.iter() ]{
+
+                let pi = *self.pi_norm.get(&(r, sname.to_string())).unwrap_or_else(|| panic!("Unknown {} {}", sname,r.0));
+                let logpi = pi.ln();
+                let logpost = (*y as f64)*logbase + logpi;
+                logposterior.push(logpost);
+            }
+            let norm_constant: f64 = logsumexp(&logposterior);
+            let logposterior_normed: Vec<f64> = logposterior.iter().map(|v| (v-norm_constant)).collect();
+
+            let posterior_normed: Vec<f64> = logposterior_normed.iter().map(|x| x.exp()).collect();
+            posterior_normed
+        }
     }
 
     pub fn posterior(&self, fingerprint: Fingerprint) -> HashMap<String, f64>{
 
         let mut fp_numeric: Vec<u32> = Vec::with_capacity(self.order.len());
         for s in self.order.iter(){
-            let y = match fingerprint.get(s){
-                Some(x) => x,
-                None => &0
-            };
+            
+            let y = fingerprint.get(s).unwrap_or(&0);
             fp_numeric.push(*y);
         }
         let posterior_numeric = self.posterior_internal(&fp_numeric);
@@ -344,8 +388,12 @@ impl PhantomPosterior{
         posterior_map
     }
 
-
-    pub fn filter_busfiles(&self, input_busfolders: HashMap<String, BusFolder>, output_busfolders: HashMap<String, String>){
+    pub fn filter_busfiles(
+        &self, input_busfolders: HashMap<String, BusFolder>, 
+        output_busfolders: HashMap<String, String>,
+        output_removed: HashMap<String, String>,
+        posterior_threshold: f64
+    ){
         // for each fingerprint a vector of posterior probs
         let mut posterior_cache: HashMap<Vec<u32>, Vec<f64>> = HashMap::new();  
 
@@ -365,15 +413,29 @@ impl PhantomPosterior{
                 (
                     sname.to_owned(), 
                     BusWriter::new(
-                        &fname, 
+                        fname, 
                         input_busfolders.get(sname).unwrap().get_bus_header()
                     )
                 ) 
             )
             .collect();
 
+        let mut buswriters_removed: HashMap<String,BusWriter> = output_removed.iter()
+            .map(|(sname, fname)| 
+                (
+                    sname.to_owned(), 
+                    BusWriter::new(
+                        fname, 
+                        input_busfolders.get(sname).unwrap().get_bus_header()
+                    )
+                ) 
+            )
+            .collect();
+
+
         let multi_iter = CellUmiIteratorMulti::new(&busnames);
         let mut records_resolved = 0;
+        let mut records_ambiguous = 0;
         let mut records_total = 0;
 
         for (_i,(_cb_umi, record_dict)) in multi_iter.enumerate(){
@@ -387,28 +449,124 @@ impl PhantomPosterior{
             }
             let fp = fps.first().unwrap();
 
-
             if !posterior_cache.contains_key(fp){
                 let pvec = self.posterior_internal(fp);
                 posterior_cache.insert(fp.clone(), pvec);
             }
             let posterior_vec = posterior_cache.get(fp).unwrap();
 
-
             let (ix, pmax) = argmax_float(posterior_vec);
             let sample_max = self.order[ix].clone();
             // if we find an unambiguous assignment, write the molecule to that sample
             // otherwise drop the molecule in all samples
-            if pmax > 0.999999{
+            if pmax > posterior_threshold {
                 let wr = buswriters.get_mut(&sample_max).unwrap();
                 let r = record_dict.get(&sample_max).unwrap();
                 wr.write_records(r);
                 records_resolved+=1;
+
+                // write the filtered reads into the "remove" files
+                for s in self.order.iter(){
+                    if *s != sample_max{
+                        // if that sample has the molecules, its a phantom
+                        if let Some(r) = record_dict.get(s){
+                            let wr = buswriters_removed.get_mut(s).unwrap();
+                            wr.write_records(r); 
+                        }
+                    }
+                }
+            }
+            else{
+                // couldnt find clear source sample, just write them back untouched
+                records_ambiguous+=1;
+                for s in self.order.iter(){
+                    if let Some(r) = record_dict.get(s){
+                        let wr = buswriters_removed.get_mut(s).unwrap();
+                        wr.write_records(r); 
+                    }
+                }
             }
         }
-        println!("{records_resolved}/{records_total} records corrected/written")
+        println!("{records_resolved}/{records_total} records corrected/written");
+        println!("{records_ambiguous}/{records_total} records were ambigous");
+
+
+        // writing the posterior cache into a file for debug
+
+        // let mut fh = File::create("/tmp/posterior.csv").unwrap();
+        // let mut header = self.order.join(",");
+        // let header2 = self.order.iter().map(|x| format!("P_{}", x)).join(",");
+
+        // header.push(',');
+        // header.push_str(&header2);
+        // writeln!(fh, "{}", header).unwrap();
+        // for (fp, post) in posterior_cache.iter(){
+
+        //     let fp_string = fp.iter().map(|x| x.to_string()).join(",");
+        //     let post_string = post.iter().map(|x| x.to_string()).join(",");
+        //     writeln!(fh, "{},{}", fp_string, post_string).unwrap();
+        // }
+
     }
 }    
+
+fn map_to_file(h: &HashMap<(AmpFactor, String), f64>, outfile: &str){
+    let mut amp: Vec<AmpFactor> = h.keys().map(|(r, _s)| *r).unique().collect();
+    let mut samplenames: Vec<String> = h.keys().map(|(_r, s)| s.to_owned()).unique().collect();
+
+    amp.sort();
+    samplenames.sort();
+
+    let mut fh = File::create(outfile).unwrap();
+    let mut header = "samplename,".to_string();
+    let rstring= amp.iter().map(|x| x.0.to_string()).collect::<Vec<String>>().join(",");
+    header.push_str(&rstring);
+    header.push_str(",frequency");
+
+    writeln!(fh, "{}", header).unwrap();
+
+
+    for s in samplenames{
+        let pi_vec: Vec<String> = amp.iter()
+            .map(|r| 
+                h.get(&(*r, s.clone())).unwrap().to_string()
+            )
+            .collect();
+        writeln!(fh, "{},{}", s, pi_vec.join(",")).unwrap();
+    }
+}
+
+
+fn logsumexp(x: &[f64]) -> f64{
+    // logsumexp trick
+
+    // getting the max, stupid f64, cant do .iter().max()
+    let c = x.iter().reduce(|a, b| if a>b {a} else {b}).unwrap();
+    let mut exp_vec: Vec<f64> = Vec::with_capacity(x.len()); // storing exp(x-c)
+    for el in x.iter(){
+        exp_vec.push((el - c).exp());
+    }
+    let z: f64 = c + exp_vec.iter().sum::<f64>().ln();
+    z
+}
+#[test]
+fn test_losumexp(){
+    assert_eq!(logsumexp(&vec![0.0]), 0.0);
+    assert_eq!(logsumexp(&vec![10.0]), 10.0);
+    assert_eq!(logsumexp(&vec![0.0, 0.0, 0.0]), 3_f64.ln());
+    assert_eq!(logsumexp(&vec![1.0, 1.0, 1.0]), 3_f64.ln() + 1.0);  // log[3 e]
+}
+
+#[test]
+fn test_posterior(){
+    let fph = FingerprintHistogram::from_csv("/home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv");
+    let posterior = PhantomPosterior::new(&fph);
+    map_to_file(&posterior.pi_norm, "/tmp/pi_norm.csv");
+    map_to_file(&posterior.vr_norm, "/tmp/vr_norm.csv");
+
+    // println!("{:?}", posterior.pi_norm);
+}
+
 
 pub fn make_fingerprint_histogram(busfolders: HashMap<String, BusFolder>) -> FingerprintHistogram{
     // main function here: takes a dict of busfolders, creates fingerprints for each molecule 

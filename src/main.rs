@@ -1,4 +1,4 @@
-use itertools::izip;
+use std::collections::HashMap;
 use rustbustools::io::BusFolder;
 use rustphantompurger::phantompurger;
 use clap::{self, Parser, Subcommand, Args};
@@ -25,16 +25,16 @@ enum MyCommand {
 }
 #[derive(Args)]
 struct PhantomArgs{
-    #[clap()]
-    busfolders: Vec<String>,
+    #[clap(long= "infolders")]
+    busfolders: String,
     #[clap(long= "t2g")] 
     t2g: String, 
 }
 
 #[derive(Args)]
 struct PhantomCBArgs{
-    #[clap()]
-    busfolders: Vec<String>,
+    #[clap(long= "infolders")]
+    busfolders: String,
 }
 
 #[derive(Args)]
@@ -50,11 +50,15 @@ struct PhantomFilterArgs{
 
     #[clap(long= "infolders")]
     infolders: String,
-    // infolders: Vec<String>,
 
     #[clap(long= "outfiles")]
-    // outfiles: Vec<String>,
     outfiles: String,
+
+    #[clap(long= "removed")]
+    removed: String,    
+    
+    #[clap(long= "threshold")]
+    threshold: f64,
 
     #[clap(long= "t2g")] 
     t2g: String, 
@@ -65,9 +69,12 @@ fn main() {
     match cli.command{
         MyCommand::phantomFingerprint(args) => {
             println!("Doing phantom");
+            let named_infolders= parse_key_value_args(&args.busfolders);
+            println!("Infiles: {:?}",named_infolders);
 
-            let busfolder_dict = args.busfolders.into_iter()
-                .map(|b|(b.clone(), BusFolder::new(&b, &args.t2g)))
+            let busfolder_dict = named_infolders.into_iter()
+                .map(|(sname, folder)|
+                    (sname, BusFolder::new(&folder, &args.t2g)))
                 .collect();
 
             let histo = phantompurger::make_fingerprint_histogram(busfolder_dict);
@@ -75,11 +82,8 @@ fn main() {
         }
         MyCommand::phantomCB(args) => {
             println!("Doing phnatom CB overlap");
-
-            let busfolder_dict = args.busfolders.into_iter()
-                .map(|b|(b.clone(), b))
-                .collect();
-            phantompurger::detect_cell_overlap(busfolder_dict, &cli.output);
+            let named_infolders= parse_key_value_args(&args.busfolders);
+            phantompurger::detect_cell_overlap(named_infolders, &cli.output);
         }
         MyCommand::phantomEstimate(args) => {
             println!("Doing phantom SIHR estimation");
@@ -91,34 +95,53 @@ fn main() {
         }
         MyCommand::phantomFilter(args) => {
 
-            let infolders: Vec<String> = args.infolders.split(' ').map(|x|x.to_string()).collect();
-            let outfiles: Vec<String> = args.outfiles.split(' ').map(|x|x.to_string()).collect();
+            let named_infolders= parse_key_value_args(&args.infolders);
+            let named_outfiles= parse_key_value_args(&args.outfiles);
+            let named_removed= parse_key_value_args(&args.removed);
+            println!("Infiles: {:?}",named_infolders);
+            println!("outfiles: {:?}",named_outfiles);
+            println!("named_removed: {:?}",named_removed);
 
-            println!("Infiles: {:?}",infolders);
-            println!("outfiles: {:?}",outfiles);
             let fph = phantompurger::FingerprintHistogram::from_csv(&args.phantomcsv);
 
             println!("Building posterior");
             let posterior = phantompurger::PhantomPosterior::new(&fph);
 
             println!("Building busfolder dicts");
-
-            let inputfolder_dict = infolders.iter()
-                .map(|b|(b.clone(),  BusFolder::new(&b, &args.t2g)))
+            let inputfolder_dict = named_infolders.iter()
+                .map(|(name, folder)|
+                    (name.clone(),  BusFolder::new(folder, &args.t2g)))
                 .collect();
 
-            let output_busfolders = izip!(
-                infolders.iter(), 
-                outfiles.iter()
+            println!("Filtering");
+
+            posterior.filter_busfiles(
+                inputfolder_dict, 
+                named_outfiles, 
+                named_removed,
+                args.threshold
             )
-            .map(|(name, outfile)|(name.clone(), outfile.clone()))
-            .collect();
-
-            println!("Filering");
-
-            posterior.filter_busfiles(inputfolder_dict, output_busfolders)
         }        
     }
+}
+
+fn parse_key_value_args(s: &str) -> HashMap<String,String>{
+
+    // we supply key:value args on the command line via this syntax:
+    // k1:v1 k2:v2 ....
+    // parse into dict
+    let mut the_map = HashMap::new();
+
+    for pair in  s.split(' '){
+        let kv:Vec<&str> = pair.split(':').collect();
+        assert!(kv.len()==2);
+        let k = kv[0].to_string();
+        let v = kv[1].to_string();
+
+        the_map.insert(k, v);
+    }
+    the_map
+
 }
 
 /*

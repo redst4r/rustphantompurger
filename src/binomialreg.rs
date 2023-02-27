@@ -1,6 +1,8 @@
 // use std::iter::zip;
 use rustbustools::utils::{self, get_progressbar};
-
+use itertools::izip;
+use statrs::distribution::Binomial;
+use statrs::distribution::Discrete;
 
 fn logfactorial(x: usize) -> f64{
     (1..(x+1)).map(|q|(q as f64).ln()).sum()
@@ -33,8 +35,8 @@ fn binomial_loglike(x: usize, n: usize, p: f64) -> f64{
     }
 
     let logcoeff = log_binomial_coeff(n, x);
-    let loglike = (x as f64) * p.ln() + ((n-x) as f64) * (1.0-p).ln() + logcoeff;
-    loglike
+    (x as f64) * p.ln() + ((n-x) as f64) * (1.0-p).ln() + logcoeff
+    
 }
 
 fn linspace(min: f64, max: f64, n: usize) -> Vec<f64>{
@@ -50,25 +52,20 @@ fn linspace(min: f64, max: f64, n: usize) -> Vec<f64>{
 
 fn logspace(logmin: f64, logmax:f64, n:usize)-> Vec<f64> {
     let logx = linspace(logmin, logmax, n);
-    let x = logx.into_iter().map(|y| 10_f64.powf(y)).collect();
-    x
+    logx.into_iter().map(|y| 10_f64.powf(y)).collect()
 }
 
-
-
-
-use itertools::izip;
-use statrs::distribution::Binomial;
-use statrs::distribution::Discrete;
-
 pub fn phantom_binomial_regression(z: &[usize], mr: &[usize], r:&[usize], s: usize) -> (f64, Vec<f64>, Vec<f64>){
+
+    // note: this does inference over 1-SIHR, i.e. a very small number, so that logspace makes sense
+
     // z is the number of non-chimeric molecules at aplification r
     // mr is the total number of mulecules at amplification r
     // amplification r
     assert_eq!(z.len() , r.len());
 
     let s_f64 = s as f64;
-    let n = 100000;
+    let n = 10000;
     // let n = 100;
     // let mut prange: Vec<f64> = linspace(1e-7, 1.0, n);
     let mut prange: Vec<f64> = logspace(-7.0, 0.0, n);
@@ -81,11 +78,9 @@ pub fn phantom_binomial_regression(z: &[usize], mr: &[usize], r:&[usize], s: usi
     // prange.push(1.0);
 
     let mut loglike_range: Vec<f64> = Vec::with_capacity(n);
-
     let bar = get_progressbar(n as u64);
+    for _p in prange.iter(){
 
-
-    for p in prange.iter(){
         // println!("p {} =====================================", p);
 
         // each (z,mr,r) tuple corresponds to a z = Binomial(N=mr , p^r)
@@ -95,9 +90,9 @@ pub fn phantom_binomial_regression(z: &[usize], mr: &[usize], r:&[usize], s: usi
 
             // the SIHR (1-p) isnt directly going into the binomial distribution
             // but a transformed version -> p_binomial
-            let correction_factor = (s_f64-1.0)* ((1.0-p)/(s_f64-1.0)).powf(ri_f64);
+            let correction_factor = (s_f64-1.0)* (_p/(s_f64-1.0)).powf(ri_f64);
 
-            let mut p_binomial = p.powf(ri_f64) + correction_factor;
+            let mut p_binomial = (1.0-_p).powf(ri_f64) + correction_factor;
             if p_binomial > 1.0{
                 p_binomial= 1.0;
             }
@@ -115,7 +110,6 @@ pub fn phantom_binomial_regression(z: &[usize], mr: &[usize], r:&[usize], s: usi
         loglike_range.push(loglike);
     }
 
-    // println!("{:?}", loglike_range);
     let (ix_max, _loglike_max) = utils::argsort::argmax_float(&loglike_range);
     let pmax = prange[ix_max];
     (pmax, prange, loglike_range)
