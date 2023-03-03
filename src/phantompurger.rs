@@ -21,7 +21,10 @@ pub fn detect_cell_overlap(busfolders: HashMap<String, String>, outfile: &str) {
         let mut entry: Vec<usize> = Vec::new();
         for s in samplenames.iter(){
             let numi = match record_dict.get(s){
-                Some(records) => records.len(),
+                Some(records) => records.iter()
+                    .map(|r|r.UMI)
+                    .unique()
+                    .count(),
                 None => 0
             };
             entry.push(numi)
@@ -42,8 +45,6 @@ pub fn detect_cell_overlap(busfolders: HashMap<String, String>, outfile: &str) {
         s.push_str(&format!(",{}", cid.0));
         writeln!(fh, "{}", s).unwrap();
     }  
-
-
 }
 
 
@@ -64,17 +65,11 @@ pub fn detect_overlap(busfolders: HashMap<String, String>) -> HashMap<Vec<String
     }
     println!("total records {}", total);
 
-
     let multi_iter = CellUmiIteratorMulti::new(&busfolders);
-    
     let bar = get_progressbar(total as u64);
-    
-    // let mut counter: HashMap<HashSet<String>, usize> = HashMap::new();
     let mut counter: HashMap<Vec<String>, usize> = HashMap::new();
 
-
     for (i,((_cb, _umi), record_dict)) in multi_iter.enumerate(){
-        // let the_Set: HashSet<String> = record_dict.keys().cloned().collect();
         let mut the_set: Vec<String> = record_dict.keys().cloned().collect();
         the_set.sort();
         let val = counter.entry(the_set).or_insert(0);
@@ -85,7 +80,6 @@ pub fn detect_overlap(busfolders: HashMap<String, String>) -> HashMap<Vec<String
         }
     }
     counter
-
 }
 
 
@@ -192,12 +186,6 @@ impl FingerprintHistogram{
 
         let z: Vec<usize> = r.iter().map(|x|*z_r.get(x).unwrap_or(&0)).collect();  // in case there's not a single non-chimeric molecule at amplification r, return 0
         let m: Vec<usize> = r.iter().map(|x|*m_r.get(x).unwrap()).collect();
-
-        // println!("r: {:?}", r);
-        // println!("zr: {:?}", z_r);
-        // println!("mr: {:?}", m_r);
-        // println!("z: {:?}", z);
-        // println!("m: {:?}", m);
 
         let (pmax, _prange, _loglike_range) = phantom_binomial_regression(&z,&m,&r, self.order.len());
         
