@@ -139,7 +139,17 @@ impl FingerprintHistogram{
     pub fn add(&mut self, record_dict: HashMap<String, Vec<BusRecord>>, ecmapper_dict:&HashMap<String, &Ec2GeneMapper>){
         // creates a fingerprint of the record_dict, updates the counts in the histogram
 
-        let fingerprints = create_fingerprint(&self.order, &record_dict, ecmapper_dict);
+        let grouped_record_dicts = groupby_gene_across_samples(&record_dict, ecmapper_dict);
+        let mut fingerprints: Vec<Vec<u32>> = Vec::new();
+        for rd in grouped_record_dicts{
+
+            let fp_hash = make_fingerprint_simple(&rd);
+            // turn the hashmap into a vector, sorted acc to order
+            let fp:  Vec<_>  = self.order.iter()
+                .map(|s| fp_hash.get(s).unwrap_or(&0)).cloned().collect();
+            fingerprints.push(fp);
+        }
+
         for fp in fingerprints{
             // update frequency
             let v = self.histogram.entry(fp).or_insert(0);
@@ -200,6 +210,73 @@ impl FingerprintHistogram{
 
 }
 
+
+pub fn groupby_gene_across_samples(
+    record_dict: &HashMap<String,Vec<BusRecord>>, 
+    ecmapper_dict: &HashMap<String, &Ec2GeneMapper>) -> Vec<HashMap<String, BusRecord>> {
+    // - build the disjoint set using samplename-> genes, i.e. the disjoint sets elements are samplenames
+    // - iterate over the disjoint_set elements (samplenames) and build the Busrecords
+
+    // check if the genes are consistent across samples
+    // if so yield the record as is
+    // otherwise split into multiple records
+    if record_dict.len() == 1{
+        // return vec![record_dict];
+    };
+    
+    // give each element in record_dict a unique name ( the key)
+    // and store i) the element itself, ii) its genes iii) its samplename
+    let mut big_hash:HashMap<String, (&BusRecord, String, &HashSet<u32>)> = HashMap::with_capacity(record_dict.len());
+    let mut id_counter: i32 = 0;
+    for (sname, records) in record_dict.iter(){
+        let ecmapper = ecmapper_dict.get(sname).unwrap();
+        for r in records{
+            let g = ecmapper.get_genes(r.EC);
+            let id_str = id_counter.to_string();
+            big_hash.insert(id_str, (r, sname.clone(), g ));
+            id_counter+= 1;
+        }
+    }
+    
+    // build disjoint set based on samplename and genes
+    let mut disjoint_set = DisjointSubsets::new();
+    for (id, (_r, _sname, gset)) in big_hash.iter(){
+        disjoint_set.add(id.clone(), (*gset).clone());
+    }
+
+    // build the emitted dict
+    let mut emit_vector: Vec<HashMap<String, BusRecord>> = Vec::new();
+    for (ids_of_set_elements, geneset) in disjoint_set.get_disjoint_set_ids_and_set(){
+        // these are now all records across the samples that map to the same gene
+        // evne if there's multiple records per sample, they can be aggregated into
+        // a single record
+
+        // group the records by sample, aggregate
+        let the_gene = *geneset.iter().next().unwrap(); // rbitrarily choose the first consissnt gene to mark in busrecords
+
+        let mut sample_grouped: HashMap<String, Vec<BusRecord>> = HashMap::new();
+        for el_id in ids_of_set_elements{
+            // pop out the element. not needed, but shrinks the map
+            let (record, samplename, _genes) = big_hash.remove(&el_id).unwrap();
+            
+            let rlist = sample_grouped.entry(samplename).or_insert(Vec::new());
+            rlist.push(record.clone());
+        }
+
+        let mut sample_grouped_aggr: HashMap<String, BusRecord> = HashMap::new();
+        for (s, recordlist) in sample_grouped.iter(){
+            let freq = recordlist.iter().map(|r| r.COUNT).sum();
+            let mut rnew = recordlist.get(0).unwrap().clone();
+            rnew.COUNT = freq;
+            rnew.EC = the_gene; 
+            sample_grouped_aggr.insert(s.to_string(), rnew);
+        }
+        emit_vector.push(sample_grouped_aggr);
+    }
+    emit_vector
+}
+
+
 fn create_fingerprint(order: &[String], record_dict: &HashMap<String, Vec<BusRecord>>, ecmapper_dict:&HashMap<String, &Ec2GeneMapper>) -> Vec<Vec<u32>>{
 
     // turns a record_dict into a fingerprint (an integer vector)
@@ -226,12 +303,60 @@ fn create_fingerprint(order: &[String], record_dict: &HashMap<String, Vec<BusRec
     emission
 }
 
+
+fn create_fingerprint2(order: &[String], record_dict: &HashMap<String, Vec<BusRecord>>, ecmapper_dict:&HashMap<String, &Ec2GeneMapper>) -> Vec<Vec<u32>>{
+
+    // turns a record_dict into a fingerprint (an integer vector)
+    // a record_Dict can result in mutiple fingerprints if teh genes are inconsistent
+
+    let mut emission: Vec<Vec<u32>> = Vec::new();
+
+    // for rdict in groupby_gene_even_simpler(filtered_dict, ecmapper_dict){
+    for rdict in groupby_gene_across_samples(record_dict, ecmapper_dict){
+
+        let fp_hash = make_fingerprint_simple(&rdict);
+        
+        // turn the hashmap into a vector, sorted acc to order
+        let fp:  Vec<_>  = order.iter()
+            .map(|s| fp_hash.get(s).unwrap_or(&0)).cloned().collect();
+
+        emission.push(fp);
+    }
+    emission
+}
+
 pub struct PhantomPosterior{
     order: Vec<String>,
     pi_norm: HashMap<(AmpFactor, String), f64>,
     p_no_hop: f64,
     vr_norm: HashMap<(AmpFactor, String), f64>
 }
+
+
+// fn record_dict_to_fingerprints(
+//     order: &[String], 
+//     record_dict: &HashMap<String, Vec<BusRecord>>, 
+//     ecmapper_dict:&HashMap<String, &Ec2GeneMapper>) -> Vec<Vec<u32>>{
+//     // turn a record dict (as emitted by the multi_iterators)
+//     // into a list of fingerprints
+//     // 
+//     // usually only on fingerprint comes back (if a CB/UMI maps to the same gene across the samples)
+//     // but sometimes it gets split
+
+//     let mut fps: Vec<Vec<u32>> = Vec::new();
+//     let grouped_record_dicts = groupby_gene_across_samples(&record_dict, &ecmapper_dict);
+//     for rd in grouped_record_dicts{
+
+
+//         let fp_hash = make_fingerprint_simple(&rd);
+
+//         // turn the hashmap into a vector, sorted acc to order
+//         let fp:  Vec<_>  = order.iter()
+//             .map(|s| fp_hash.get(s).unwrap_or(&0)).cloned().collect();
+//         fps.push(fp);
+//     }
+//     fps
+// }
 
 impl PhantomPosterior{
 
@@ -425,58 +550,64 @@ impl PhantomPosterior{
         let mut records_resolved = 0;
         let mut records_ambiguous = 0;
         let mut records_total = 0;
-
+        let mut records_multi_finger = 0;
         for (_i,(_cb_umi, record_dict)) in multi_iter.enumerate(){
             records_total += 1;
 
-            let fps = create_fingerprint(&self.order, &record_dict, &ecmapper_dict);
+            // turn into consistent cb/umi/gene over samples
+            let grouped_record_dicts = groupby_gene_across_samples(&record_dict, &ecmapper_dict);
+            for rd in grouped_record_dicts{
 
-            // if we get a record dict that turns into more than one fingerprint, just ignore
-            if fps.len() !=1 {
-                continue
-            }
-            let fp = fps.first().unwrap();
 
-            if !posterior_cache.contains_key(fp){
-                let pvec = self.posterior_internal(fp);
-                posterior_cache.insert(fp.clone(), pvec);
-            }
-            let posterior_vec = posterior_cache.get(fp).unwrap();
+                let fp_hash = make_fingerprint_simple(&rd);
+        
+                // turn the hashmap into a vector, sorted acc to order
+                let fp:  &Vec<_>  = &self.order.iter()
+                    .map(|s| fp_hash.get(s).unwrap_or(&0)).cloned().collect();
 
-            let (ix, pmax) = argmax_float(posterior_vec);
-            let sample_max = self.order[ix].clone();
-            // if we find an unambiguous assignment, write the molecule to that sample
-            // otherwise drop the molecule in all samples
-            if pmax > posterior_threshold {
-                let wr = buswriters.get_mut(&sample_max).unwrap();
-                let r = record_dict.get(&sample_max).unwrap();
-                wr.write_records(r);
-                records_resolved+=1;
 
-                // write the filtered reads into the "remove" files
-                for s in self.order.iter(){
-                    if *s != sample_max{
-                        // if that sample has the molecules, its a phantom
-                        if let Some(r) = record_dict.get(s){
-                            let wr = buswriters_removed.get_mut(s).unwrap();
-                            wr.write_records(r); 
+                if !posterior_cache.contains_key(fp){
+                    let pvec = self.posterior_internal(fp);
+                    posterior_cache.insert(fp.clone(), pvec);
+                }
+                let posterior_vec = posterior_cache.get(fp).unwrap();
+
+                let (ix, pmax) = argmax_float(posterior_vec);
+                let sample_max = self.order[ix].clone();
+                // if we find an unambiguous assignment, write the molecule to that sample
+                // otherwise drop the molecule in all samples
+                if pmax > posterior_threshold {
+                    let wr = buswriters.get_mut(&sample_max).unwrap();
+                    let r = record_dict.get(&sample_max).unwrap();
+                    wr.write_records(r);
+                    records_resolved+=1;
+
+                    // write the filtered reads into the "remove" files
+                    for s in self.order.iter(){
+                        if *s != sample_max{
+                            // if that sample has the molecules, its a phantom
+                            if let Some(r) = record_dict.get(s){
+                                let wr = buswriters_removed.get_mut(s).unwrap();
+                                wr.write_records(r); 
+                            }
                         }
                     }
                 }
-            }
-            else{
-                // couldnt find clear source sample, just write them back untouched
-                records_ambiguous+=1;
-                for s in self.order.iter(){
-                    if let Some(r) = record_dict.get(s){
-                        let wr = buswriters_removed.get_mut(s).unwrap();
-                        wr.write_records(r); 
-                    }
+                else{
+                    // couldnt find clear source sample, just write them back untouched
+                    records_ambiguous+=1;
+                    // for s in self.order.iter(){
+                    //     if let Some(r) = record_dict.get(s){
+                    //         let wr = buswriters_removed.get_mut(s).unwrap();
+                    //         wr.write_records(r); 
+                    //     }
+                    // }
                 }
             }
         }
         println!("{records_resolved}/{records_total} records corrected/written");
         println!("{records_ambiguous}/{records_total} records were ambigous");
+        println!("{records_multi_finger}/{records_total} records were mutli");
 
 
         // writing the posterior cache into a file for debug
@@ -495,7 +626,7 @@ impl PhantomPosterior{
         //     writeln!(fh, "{},{}", fp_string, post_string).unwrap();
         // }
 
-    }
+    } 
 }    
 
 fn map_to_file(h: &HashMap<(AmpFactor, String), f64>, outfile: &str){
@@ -668,8 +799,62 @@ pub mod tests{
     use std::collections::{HashSet, HashMap};
     use rustbustools::{consistent_genes::Ec2GeneMapper, io::{BusRecord, BusFolder}};
     use statrs::assert_almost_eq;
-    use super::{_make_fingerprint_histogram, make_fingerprint_simple, groupby_gene_even_simpler, FingerprintHistogram};
+    use super::{_make_fingerprint_histogram, make_fingerprint_simple, groupby_gene_even_simpler, FingerprintHistogram, groupby_gene_across_samples};
     use super::{make_fingerprint_histogram, detect_cell_overlap};
+
+    #[test]
+    fn test_groupby_gene_across_samples(){
+        let es1 = create_dummy_ec();
+        let es2 = create_dummy_ec();
+        let es_dict: HashMap<String, &Ec2GeneMapper> = vec![
+            ("s1".to_string(), &es1),
+            ("s2".to_string(), &es2),
+        ].into_iter().collect();
+
+        // first sample: two records, with consistent gene A
+        let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0};
+        let r2 =BusRecord{CB: 0, UMI: 1, EC: 2, COUNT: 2, FLAG: 0};
+
+        // second sample: two records, with consistent gene A,B
+        let s1 = BusRecord{CB: 0, UMI: 1, EC: 2, COUNT: 3, FLAG: 0};
+        let s2 = BusRecord{CB: 0, UMI: 1, EC: 2, COUNT: 3, FLAG: 0};
+
+        let record_dict = vec![
+            ("s1".to_string(), vec![r1, r2]),
+            ("s2".to_string(), vec![s1, s2]),
+        ].into_iter().collect();
+
+        let res = groupby_gene_across_samples(&record_dict, &es_dict);
+
+        // println!("{:?}", res);
+        assert_eq!(res.len(), 1);
+        // make sure it aggregtes correctly
+        let r = res[0].clone();
+        assert_eq!(r.get("s1").unwrap().COUNT, 4);
+        assert_eq!(r.get("s2").unwrap().COUNT, 6);
+
+        /*
+        more complicated example where the ECs dont fully agree
+        in sample things indicate A, in sampel B i'ts inconsistent
+        looking at all samples together A,B could be an option
+         */
+        // first sample: two records, with consistent gene A
+        let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0}; //A
+        let r2 =BusRecord{CB: 0, UMI: 1, EC: 2, COUNT: 2, FLAG: 0}; //A,B
+
+        // second sample: two records, with consistent gene A the other consistent with gene B
+        let s1 = BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 3, FLAG: 0}; // A
+        let s2 = BusRecord{CB: 0, UMI: 1, EC: 1, COUNT: 3, FLAG: 0}; //B
+
+        let record_dict = vec![
+            ("s1".to_string(), vec![r1, r2]),
+            ("s2".to_string(), vec![s1, s2]),
+        ].into_iter().collect();
+        let res = groupby_gene_across_samples(&record_dict, &es_dict);
+        println!("{:?}", res);
+
+
+    }
 
     fn create_dummy_ec() ->Ec2GeneMapper{
         let ec0: HashSet<String> = vec!["A".to_string()].into_iter().collect();

@@ -134,7 +134,7 @@ fn parse_key_value_args(s: &str) -> HashMap<String,String>{
 
     for pair in  s.split(' '){
         let kv:Vec<&str> = pair.split(':').collect();
-        assert!(kv.len()==2);
+        assert!(kv.len()==2, "{pair}");
         let k = kv[0].to_string();
         let v = kv[1].to_string();
 
