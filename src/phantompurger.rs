@@ -1,5 +1,5 @@
 use std::{collections::{HashMap, HashSet}, fs::File, io::{Write, BufReader, BufRead}, time::Instant, hash::Hash};
-use crate::{disjoint::{DisjointSubsets}, binomialreg::phantom_binomial_regression};
+use crate::{disjoint::{DisjointSubsets}, binomialreg::phantom_binomial_regression, utils::logsumexp};
 use indicatif::{ProgressBar, ProgressStyle};
 use itertools::{izip, Itertools};
 use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::{BusRecord, BusFolder, BusWriter}, iterators::CbUmiIterator, utils::{get_progressbar, argsort::argmax_float}, consistent_genes::Ec2GeneMapper};
@@ -536,26 +536,6 @@ fn map_to_file(h: &HashMap<(AmpFactor, String), f64>, outfile: &str){
     }
 }
 
-
-fn logsumexp(x: &[f64]) -> f64{
-    // logsumexp trick
-
-    // getting the max, stupid f64, cant do .iter().max()
-    let c = x.iter().reduce(|a, b| if a>b {a} else {b}).unwrap();
-    let mut exp_vec: Vec<f64> = Vec::with_capacity(x.len()); // storing exp(x-c)
-    for el in x.iter(){
-        exp_vec.push((el - c).exp());
-    }
-    let z: f64 = c + exp_vec.iter().sum::<f64>().ln();
-    z
-}
-#[test]
-fn test_losumexp(){
-    assert_eq!(logsumexp(&vec![0.0]), 0.0);
-    assert_eq!(logsumexp(&vec![10.0]), 10.0);
-    assert_eq!(logsumexp(&vec![0.0, 0.0, 0.0]), 3_f64.ln());
-    assert_eq!(logsumexp(&vec![1.0, 1.0, 1.0]), 3_f64.ln() + 1.0);  // log[3 e]
-}
 
 #[test]
 fn test_posterior(){
