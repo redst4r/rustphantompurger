@@ -8,11 +8,6 @@ edition = "2021"
 [dependencies]
 indicatif = "0.16"
 clap = { version = "3.1.18", features = ["derive"] }
-# sprs = "0.11"
-# regex = "1"
 statrs = "0.16"
-# rand = "0.8"
-# probability="0.20"  # for faster Binomial Sampling, using inverse pdf
 itertools="0.10.5"
-# tempfile="3.3.0"
 rustbustools = { path = "/home/michi/Dropbox/rustbustools" }

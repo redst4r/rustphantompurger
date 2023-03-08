@@ -1,3 +1,5 @@
+use std::collections::{HashMap};
+
 pub fn logsumexp(x: &[f64]) -> f64{
     // logsumexp trick
 
@@ -11,6 +13,49 @@ pub fn logsumexp(x: &[f64]) -> f64{
     z
 }
 
+// Takes a Hashmap K->V and transforms all values, leaving the keys as they are
+// note that this consumes the hashmap!
+pub fn valmap<K,V,V2, F>(fun: F, the_map: HashMap<K, V>) -> HashMap<K,V2>
+where 
+    F: Fn(V)->V2,
+    K: Eq + std::hash::Hash
+{
+
+    let r: HashMap<K,V2> = the_map.into_iter().map(|(k,v)| (k, fun(v))).collect();
+    r
+
+}
+
+pub fn valmap_ref<K,V,V2, F>(fun: F, the_map: &HashMap<K, V>) -> HashMap<K,V2>
+where 
+    F: Fn(&V)->V2,
+    K: Eq + std::hash::Hash+Clone
+{
+    let r: HashMap<K,V2> = the_map.into_iter().map(|(k,v)| (k.clone(), fun(v))).collect();
+    r
+
+}
+
+#[test]
+fn test_valmap(){
+    let h: HashMap<&str, usize> = vec![("A", 1), ("B", 2)].into_iter().collect();
+
+    // basics
+    let r = valmap(|x| x.to_string(), h);
+
+    assert_eq!(r.get("A").unwrap(), "1");
+    assert_eq!(r.get("B").unwrap(), "2");
+
+
+    // capturing some context
+    let h: HashMap<&str, usize> = vec![("A", 1), ("B", 2)].into_iter().collect();
+    let inc = 10_usize;
+    let r = valmap(|x| x+inc, h);
+
+    assert_eq!(*r.get("A").unwrap(), 11);
+    assert_eq!(*r.get("B").unwrap(), 12);
+
+}
 
 // fn logfactorial(x: usize) -> f64{
 //     (1..(x+1)).map(|q|(q as f64).ln()).sum()

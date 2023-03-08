@@ -1,8 +1,11 @@
 use std::{collections::{HashMap, HashSet}, fs::File, io::{Write, BufReader, BufRead}, time::Instant, hash::Hash};
-use crate::{disjoint::{DisjointSubsets}, binomialreg::phantom_binomial_regression, utils::logsumexp};
-use indicatif::{ProgressBar, ProgressStyle};
+use crate::{binomialreg::phantom_binomial_regression, utils::{logsumexp, valmap, valmap_ref}};
 use itertools::{izip, Itertools};
-use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::{BusRecord, BusFolder, BusWriter}, iterators::CbUmiIterator, utils::{get_progressbar, argsort::argmax_float}, consistent_genes::Ec2GeneMapper};
+use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::BusIteratorBuffered, iterators::{CbUmiGroupIterator, CellGroupIterator}};
+use rustbustools::io::{BusRecord, BusFolder, BusWriter};
+use rustbustools::utils::{get_progressbar, argsort::argmax_float};
+use rustbustools::consistent_genes::Ec2GeneMapper;
+use rustbustools::disjoint::DisjointSubsets;
 
 
 #[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug,Copy)]
@@ -13,11 +16,25 @@ pub fn detect_cell_overlap(busfolders: HashMap<String, String>, outfile: &str) {
     // if extensive swapping has occured, we'll see shared CBs across experiments
     // with correlated #umis
 
+    // figure out size of iterators, just for progress bar!
+    let mut total = 0;
+    // TODO: this doesnt check if the EC overlaps
+    for v in busfolders.values(){
+        println!("determine size of iterator");
+        let total_records = BusIteratorBuffered::new(v).groupby_cb().count();
+        if total< total_records{
+            total=total_records
+        }
+    }
+    println!("total records {}", total);
+
     let samplenames: Vec<String> = busfolders.keys().cloned().collect();
     let multi_iter = CellIteratorMulti::new(&busfolders);
     let mut result: HashMap<CB, Vec<usize>> = HashMap::new();
 
-    for (c, record_dict) in multi_iter{
+    let bar = get_progressbar(total as u64);
+
+    for (i,(c, record_dict)) in multi_iter.enumerate(){
         let mut entry: Vec<usize> = Vec::new();
         for s in samplenames.iter(){
             let numi = match record_dict.get(s){
@@ -30,6 +47,10 @@ pub fn detect_cell_overlap(busfolders: HashMap<String, String>, outfile: &str) {
             entry.push(numi)
         }
         result.insert(CB(c), entry);
+
+        if i % 10_000== 0{  // cells iterations are usually rather small, i.e. millions, update more reg
+            bar.inc(10_000);
+        }
     };
     
     // write to file
@@ -55,10 +76,8 @@ pub fn detect_overlap(busfolders: HashMap<String, String>) -> HashMap<Vec<String
     let mut total = 0;
     // TODO: this doesnt check if the EC overlaps
     for v in busfolders.values(){
-        let cbumi_iter_tmp = CbUmiIterator::new(v);
         println!("determine size of iterator");
-        // let now = Instant::now();
-        let total_records = cbumi_iter_tmp.count();
+        let total_records = BusIteratorBuffered::new(v).groupby_cbumi().count();
         if total< total_records{
             total=total_records
         }
@@ -92,7 +111,6 @@ pub fn detect_overlap(busfolders: HashMap<String, String>) -> HashMap<Vec<String
 pub struct FingerprintHistogram{
     order: Vec<String>,
     histogram: HashMap<Vec<u32>, usize>,
-    drop_multimapped: bool
 }
 
 #[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug, Copy)]
@@ -123,7 +141,6 @@ impl FingerprintHistogram{
         FingerprintHistogram{ 
             order: samplenames,
             histogram,
-            drop_multimapped: true
         }
     }
 
@@ -132,7 +149,6 @@ impl FingerprintHistogram{
         FingerprintHistogram{ 
             order: sample_order.to_owned(), // not sure why, linter is suggesting it
             histogram : hist,
-            drop_multimapped: true
         }
     }
 
@@ -158,7 +174,7 @@ impl FingerprintHistogram{
     }
 
     pub fn to_csv(&self, outfile: &str){
-        let mut fh = File::create(outfile).unwrap();
+        let mut fh = File::create(outfile).expect("Cant create file: {outfile}");
         let mut header = self.order.join(",");
         header.push_str(",frequency");
         writeln!(fh, "{}", header).unwrap();
@@ -517,7 +533,10 @@ impl PhantomPosterior{
         ).collect();
 
         // a list of busfile-names for the iterator
-        let busnames =input_busfolders.iter()
+        // let busnames = valmap(|bfolder| bfolder.get_busfile(), input_busfolders);
+        // let busnames = valmap_ref(|bfolder| bfolder.get_busfile(), &input_busfolders);
+
+        let busnames: HashMap<String,String> =input_busfolders.iter()
             .map(|(s, bfolder)| (s.clone(), bfolder.get_busfile()))
             .collect();
     
@@ -545,26 +564,58 @@ impl PhantomPosterior{
             )
             .collect();
 
+        // figure out size of iterators, just for progress bar!
+        let mut total = 0;
+        // TODO: this doesnt check if the EC overlaps
+        for v in busnames.values(){
+            println!("determine size of iterator");
+            let total_records = BusIteratorBuffered::new(v).groupby_cbumi().count();
+            if total< total_records{
+                total=total_records
+            }
+        }
+        println!("total records {}", total);
+        let bar = get_progressbar(total as u64);
 
         let multi_iter = CellUmiIteratorMulti::new(&busnames);
         let mut records_resolved = 0;
         let mut records_ambiguous = 0;
         let mut records_total = 0;
-        let mut records_multi_finger = 0;
+        // let mut records_multi_finger = 0;
+
+        let mut records_original: HashMap<String, usize> = HashMap::new();
+        let mut records_written: HashMap<String, usize> = HashMap::new();
+        let mut records_filtered: HashMap<String, usize> = HashMap::new();
+
+        let mut reads_original: HashMap<String, usize> = HashMap::new();
+        let mut reads_written: HashMap<String, usize> = HashMap::new();
+        let mut reads_filtered: HashMap<String, usize> = HashMap::new();
+
         for (_i,(_cb_umi, record_dict)) in multi_iter.enumerate(){
             records_total += 1;
+
+            if _i % 1_000_000== 0{
+                bar.inc(1_000_000);
+            }
+
+            for (sname, rvector) in record_dict.iter(){
+                let v = records_original.entry(sname.to_string()).or_insert(0);
+                *v+=rvector.len();
+
+                let v = reads_original.entry(sname.to_string()).or_insert(0);
+                let nreads: usize = rvector.iter().map(|r|r.COUNT as usize).sum();
+                *v += nreads;
+            }
 
             // turn into consistent cb/umi/gene over samples
             let grouped_record_dicts = groupby_gene_across_samples(&record_dict, &ecmapper_dict);
             for rd in grouped_record_dicts{
-
 
                 let fp_hash = make_fingerprint_simple(&rd);
         
                 // turn the hashmap into a vector, sorted acc to order
                 let fp:  &Vec<_>  = &self.order.iter()
                     .map(|s| fp_hash.get(s).unwrap_or(&0)).cloned().collect();
-
 
                 if !posterior_cache.contains_key(fp){
                     let pvec = self.posterior_internal(fp);
@@ -582,6 +633,15 @@ impl PhantomPosterior{
                     wr.write_records(r);
                     records_resolved+=1;
 
+
+                    let v = records_written.entry(sample_max.to_string()).or_insert(0);
+                    *v+=r.len();
+    
+                    let v = reads_written.entry(sample_max.to_string()).or_insert(0);
+                    let nreads: usize = r.iter().map(|r|r.COUNT as usize).sum();
+                    *v += nreads;
+                    
+
                     // write the filtered reads into the "remove" files
                     for s in self.order.iter(){
                         if *s != sample_max{
@@ -589,6 +649,14 @@ impl PhantomPosterior{
                             if let Some(r) = record_dict.get(s){
                                 let wr = buswriters_removed.get_mut(s).unwrap();
                                 wr.write_records(r); 
+
+
+                                let v = records_filtered.entry(s.to_string()).or_insert(0);
+                                *v+=r.len();
+                
+                                let v = reads_filtered.entry(s.to_string()).or_insert(0);
+                                let nreads: usize = r.iter().map(|r|r.COUNT as usize).sum();
+                                *v += nreads;
                             }
                         }
                     }
@@ -607,7 +675,28 @@ impl PhantomPosterior{
         }
         println!("{records_resolved}/{records_total} records corrected/written");
         println!("{records_ambiguous}/{records_total} records were ambigous");
-        println!("{records_multi_finger}/{records_total} records were mutli");
+        // println!("{records_multi_finger}/{records_total} records were mutli");
+
+
+        for s in self.order.iter(){
+            let ro = records_original.get(s).unwrap_or(&0);
+            let rr =records_written.get(s).unwrap_or(&0);
+            let rf = records_filtered.get(s).unwrap_or(&0);
+            let total = rr+rf;
+            println!(
+                "{s} records: orig: {ro}, written {rr}, filtered {rf}, summed: {total}"
+            )
+        }
+        println!("=============================");
+        for s in self.order.iter(){
+            let ro = reads_original.get(s).unwrap_or(&0);
+            let rr =reads_written.get(s).unwrap_or(&0);
+            let rf = reads_filtered.get(s).unwrap_or(&0);
+            let total = rr+rf;
+            println!(
+                "{s} reads: orig: {ro}, written {rr}, filtered {rf}, summed: {total}"
+            )
+        }
 
 
         // writing the posterior cache into a file for debug
@@ -693,14 +782,27 @@ pub fn make_fingerprint_histogram(busfolders: HashMap<String, BusFolder>) -> Fin
 
 pub fn _make_fingerprint_histogram(busnames: &HashMap<String, String>, ecmapper_dict: &HashMap<String, &Ec2GeneMapper>) -> FingerprintHistogram{
 
+    // figure out size of iterators, just for progress bar!
+    let mut total = 0;
+    // TODO: this doesnt check if the EC overlaps
+    for v in busnames.values(){
+        println!("determine size of iterator");
+        let total_records = BusIteratorBuffered::new(v).groupby_cbumi().count();
+        if total< total_records{
+            total=total_records
+        }
+    }
+    println!("total records {}", total);
+
     // the actual workhorse, make_fingerprint_histogram is just a convenient wrapper
     let multi_iter = CellUmiIteratorMulti::new(busnames);
     
-    let bar = ProgressBar::new_spinner();
-    bar.set_style(ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos} {per_sec}")
-        .progress_chars("##-"));
-        
+    // let bar = ProgressBar::new_spinner();
+    // bar.set_style(ProgressStyle::default_bar()
+    //     .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos} {per_sec}")
+    //     .progress_chars("##-"));
+    let bar = get_progressbar(total as u64);
+
     let mut order: Vec<_> = busnames.keys().cloned().collect();
     order.sort();
 
@@ -797,8 +899,10 @@ pub fn groupby_gene_even_simpler(record_dict: HashMap<String,BusRecord>, ecmappe
 #[cfg(test)]
 pub mod tests{
     use std::collections::{HashSet, HashMap};
-    use rustbustools::{consistent_genes::Ec2GeneMapper, io::{BusRecord, BusFolder}};
+    use rustbustools::{consistent_genes::Ec2GeneMapper, io::{BusRecord, BusFolder, setup_busfile}};
     use statrs::assert_almost_eq;
+    use crate::phantompurger::PhantomPosterior;
+
     use super::{_make_fingerprint_histogram, make_fingerprint_simple, groupby_gene_even_simpler, FingerprintHistogram, groupby_gene_across_samples};
     use super::{make_fingerprint_histogram, detect_cell_overlap};
 
@@ -1011,7 +1115,6 @@ pub mod tests{
     }
 
     #[test]
-
     fn test_make_fingerprint_simple(){
 
         let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0};
@@ -1093,7 +1196,6 @@ pub mod tests{
         let fph = FingerprintHistogram {
             order,
             histogram,
-            drop_multimapped: true,
         };
 
         fph.to_csv("/tmp/finger.csv");
@@ -1130,7 +1232,6 @@ pub mod tests{
         let fph = FingerprintHistogram {
             order,
             histogram,
-            drop_multimapped: true,
         };
 
         let p = fph.estimate_sihr();
@@ -1139,4 +1240,77 @@ pub mod tests{
         assert_almost_eq!(p,  0.5, 0.001);
 
     }
+
+    #[test]
+    fn test_filter(){
+
+        // exclusive in 1
+        let r1 = BusRecord{CB: 0, UMI: 0, EC: 0, COUNT: 100, FLAG: 0};
+        // exclusuve in 2
+        let s1 = BusRecord{CB: 0, UMI: 21, EC: 1, COUNT: 100, FLAG: 0};
+        // exclusuve in 2
+        let t1 = BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 100, FLAG: 0};
+
+        // shared [10,1] in 1/2
+        let r2 = BusRecord{CB: 1, UMI: 0, EC: 0, COUNT: 100, FLAG: 0};
+        let s2 = BusRecord{CB: 1, UMI: 0, EC: 2, COUNT: 1, FLAG: 0};
+        let t2 = BusRecord{CB: 1, UMI: 0, EC: 2, COUNT: 1, FLAG: 0};
+
+        let (b1, tdir1) = setup_busfile(&vec![r1,r2]);
+        let (b2, tdir2) = setup_busfile(&vec![s1,s2]);
+        let (b3, tdir3) = setup_busfile(&vec![t1,t2]);
+
+        println!("{}", b1);
+
+        let es1 = create_dummy_ec();
+        let es2 = create_dummy_ec();
+        let es3 = create_dummy_ec();
+        let es4 = create_dummy_ec();
+        let es5 = create_dummy_ec();
+        let es6= create_dummy_ec();
+        let d1 = tdir1.path().to_str().unwrap().to_string();
+        let d2 = tdir2.path().to_str().unwrap().to_string();
+        let d3 = tdir3.path().to_str().unwrap().to_string();
+
+        let busfolders = HashMap::from([
+            ("s1".to_string(), BusFolder{foldername: d1.clone(), ec2gene: es1}),
+            ("s2".to_string(), BusFolder{foldername: d2.clone(), ec2gene: es2}),
+            ("s3".to_string(), BusFolder{foldername: d3.clone(), ec2gene: es3})
+        ]);
+        let fph = make_fingerprint_histogram(busfolders);
+        println!("{:?}", fph.histogram);
+
+        let post = PhantomPosterior::new(&fph);
+
+        let filtered_bus = HashMap::from([
+            ("s1".to_string(), "/tmp/s1_filtered.bus".to_string()),
+            ("s2".to_string(), "/tmp/s2_filtered.bus".to_string()),
+            ("s3".to_string(), "/tmp/s3_filtered.bus".to_string())
+        ]);
+        let removed_bus = HashMap::from([
+            ("s1".to_string(), "/tmp/s1_removed.bus".to_string()),
+            ("s2".to_string(), "/tmp/s2_removed.bus".to_string()),
+            ("s3".to_string(), "/tmp/s3_removed.bus".to_string()),
+        ]);        
+        let busfolders = HashMap::from([
+            ("s1".to_string(), BusFolder{foldername: d1, ec2gene: es4}),
+            ("s2".to_string(), BusFolder{foldername: d2, ec2gene: es5}),
+            ("s3".to_string(), BusFolder{foldername: d3, ec2gene: es6}),
+        ]);
+        post.filter_busfiles(
+            busfolders, 
+            filtered_bus, 
+            removed_bus, 
+            0.99
+        );
+        println!("============================");
+        rustbustools::inspect::inspect("/tmp/s1_filtered.bus");
+        println!("============================");
+        rustbustools::inspect::inspect("/tmp/s2_filtered.bus");
+        println!("============================");
+        rustbustools::inspect::inspect("/tmp/s3_filtered.bus");
+
+
+    }
+
 }
