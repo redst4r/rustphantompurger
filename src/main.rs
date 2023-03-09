@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use rustbustools::io::BusFolder;
-use rustphantompurger::{phantompurger, posterior};
+use rustbustools::{io::BusFolder};
+use rustphantompurger::{phantompurger, posterior, utils::{valmap}};
 use clap::{self, Parser, Subcommand, Args};
 
 #[derive(Parser)]
@@ -72,10 +72,7 @@ fn main() {
             let named_infolders= parse_key_value_args(&args.busfolders);
             println!("Infiles: {:?}",named_infolders);
 
-            let busfolder_dict = named_infolders.into_iter()
-                .map(|(sname, folder)|
-                    (sname, BusFolder::new(&folder, &args.t2g)))
-                .collect();
+            let busfolder_dict = valmap(|folder|BusFolder::new(&folder, &args.t2g), named_infolders);
 
             let histo = phantompurger::make_fingerprint_histogram(busfolder_dict);
             histo.to_csv(&cli.output);
@@ -108,13 +105,9 @@ fn main() {
             let posterior = posterior::PhantomPosterior::new(&fph);
 
             println!("Building busfolder dicts");
-            let inputfolder_dict = named_infolders.iter()
-                .map(|(name, folder)|
-                    (name.clone(),  BusFolder::new(folder, &args.t2g)))
-                .collect();
+            let inputfolder_dict = valmap(|folder|BusFolder::new(&folder, &args.t2g), named_infolders);
 
             println!("Filtering");
-
             posterior.filter_busfiles(
                 inputfolder_dict, 
                 named_outfiles, 

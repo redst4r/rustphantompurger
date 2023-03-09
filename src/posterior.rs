@@ -283,14 +283,12 @@ impl PhantomPosterior{
                     wr.write_record(r);
                     records_resolved+=1;
 
-
                     let v = records_written.entry(sample_max.to_string()).or_insert(0);
                     *v+=1;
     
                     let v = reads_written.entry(sample_max.to_string()).or_insert(0);
                     *v += r.COUNT as usize;
                     
-
                     // write the filtered reads into the "remove" files
                     for s in self.order.iter(){
                         if *s != sample_max{
@@ -298,7 +296,6 @@ impl PhantomPosterior{
                             if let Some(r) = rd.get(s){
                                 let wr = buswriters_removed.get_mut(s).unwrap();
                                 wr.write_record(r); 
-
 
                                 let v = records_filtered.entry(s.to_string()).or_insert(0);
                                 *v+=1;
@@ -395,9 +392,13 @@ mod testing{
         let s2 = BusRecord{CB: 1, UMI: 0, EC: 2, COUNT: 1, FLAG: 0};
         let t2 = BusRecord{CB: 1, UMI: 0, EC: 2, COUNT: 1, FLAG: 0};
 
-        let (_b1, tdir1) = setup_busfile(&vec![r1,r2]);
-        let (_b2, tdir2) = setup_busfile(&vec![s1,s2]);
-        let (_b3, tdir3) = setup_busfile(&vec![t1,t2]);
+        let r3 = BusRecord{CB: 1, UMI: 0, EC: 0, COUNT: 100, FLAG: 0};
+        let s3 = BusRecord{CB: 1, UMI: 0, EC: 0, COUNT: 1, FLAG: 0};
+        let t3 = BusRecord{CB: 1, UMI: 0, EC: 1, COUNT: 1, FLAG: 0};
+
+        let (_b1, tdir1) = setup_busfile(&vec![r1,r2, r3]);
+        let (_b2, tdir2) = setup_busfile(&vec![s1,s2, s3]);
+        let (_b3, tdir3) = setup_busfile(&vec![t1,t2, t3]);
 
 
         let es1 = create_dummy_ec();
@@ -455,14 +456,14 @@ mod testing{
     fn test_fullbus(){
 
         // let fname1 = "/home/michi/bus_testing/bus_output/";
-        let fname1 = "/home/michi/bus_testing/bus_output_short";
-        let fname2 = "/home/michi/bus_testing/bus_output_short";
+        // let fname1 = "/home/michi/bus_testing/bus_output_short";
+        // let fname2 = "/home/michi/bus_testing/bus_output_short";
 
         // let fname1 = "/home/michi/mounts/TB4drive/ISB_data/MNGZ01/MS_processed/S1/kallisto/sort_bus/bus_output/";
         // let fname2 = "/home/michi/mounts/TB4drive/ISB_data/MNGZ01/MS_processed/S2/kallisto/sort_bus/bus_output/";
         
-        // let fname1 = "/home/michi/mounts/TB4drive/ISB_data/LT_pilot/LT_pilot/kallisto_quant/Fresh1/kallisto/sort_bus/bus_output/";
-        // let fname2 = "/home/michi/mounts/TB4drive/ISB_data/LT_pilot/LT_pilot/kallisto_quant/Fresh2/kallisto/sort_bus/bus_output/";
+        let fname1 = "/home/michi/mounts/TB4drive/ISB_data/LT_pilot/LT_pilot/kallisto_quant/Fresh1/kallisto/sort_bus/bus_output/";
+        let fname2 = "/home/michi/mounts/TB4drive/ISB_data/LT_pilot/LT_pilot/kallisto_quant/Fresh2/kallisto/sort_bus/bus_output/";
 
         // "/home/mstrasse/TB4/resources/transcripts_to_genes.txt"
         let t2g = "/home/michi/mounts/TB4drive/kallisto_resources/transcripts_to_genes.txt";
