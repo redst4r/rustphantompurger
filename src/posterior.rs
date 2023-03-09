@@ -1,8 +1,8 @@
 use std::{collections::{HashMap}, hash::Hash};
-use crate::{utils::{logsumexp}, phantompurger::{FingerprintHistogram, Fingerprint, groupby_gene_across_samples, make_fingerprint_simple, make_fingerprint_histogram}};
+use crate::{utils::{logsumexp, valmap_ref}, phantompurger::{FingerprintHistogram, Fingerprint, groupby_gene_across_samples, make_fingerprint_simple}};
 use itertools::{izip};
-use rustbustools::{bus_multi::{CellUmiIteratorMulti}, io::{BusIteratorBuffered}, iterators::{CbUmiGroupIterator}};
-use rustbustools::io::{BusRecord, BusFolder, BusWriter};
+use rustbustools::{bus_multi::{CellUmiIteratorMulti}, io::{BusIteratorBuffered}, iterators::CbUmiGroupIterator};
+use rustbustools::io::{BusFolder, BusWriter};
 use rustbustools::utils::{get_progressbar, argsort::argmax_float};
 
 
@@ -69,12 +69,12 @@ impl PhantomPosterior{
                 let n_reads_total = (*n_reads) * (*freq as u32);
                 let key =(r, order[i].clone()); 
                 let v = vr.entry(key).or_insert(0);
-                *v+= n_reads_total
+                *v+= n_reads_total;
             }
         }
         // for fixed r, normalize across samples
         let mut norm_constant: HashMap<AmpFactor, u32> = HashMap::new();
-        for ((r, _s), f) in vr.iter(){
+        for ((r, _s), f) in &vr{
             let v = norm_constant.entry(*r).or_insert(0);
             *v+= *f;
         }
@@ -151,8 +151,7 @@ impl PhantomPosterior{
     pub fn posterior(&self, fingerprint: Fingerprint) -> HashMap<String, f64>{
 
         let mut fp_numeric: Vec<u32> = Vec::with_capacity(self.order.len());
-        for s in self.order.iter(){
-            
+        for s in &self.order{
             let y = fingerprint.get(s).unwrap_or(&0);
             fp_numeric.push(*y);
         }
@@ -167,9 +166,9 @@ impl PhantomPosterior{
     }
 
     pub fn filter_busfiles(
-        &self, input_busfolders: HashMap<String, BusFolder>, 
-        output_busfolders: HashMap<String, String>,
-        output_removed: HashMap<String, String>,
+        &self, input_busfolders: &HashMap<String, BusFolder>, 
+        output_busfolders: &HashMap<String, String>,
+        output_removed: &HashMap<String, String>,
         posterior_threshold: f64
     ){
         // for each fingerprint a vector of posterior probs
@@ -214,16 +213,16 @@ impl PhantomPosterior{
             .collect();
 
         // figure out size of iterators, just for progress bar!
-        let mut total = 0;
-        // TODO: this doesnt check if the EC overlaps
-        for v in busnames.values(){
-            println!("determine size of iterator");
-            let total_records = BusIteratorBuffered::new(v).groupby_cbumi().count();
-            if total< total_records{
-                total=total_records
-            }
-        }
-        println!("total records {}", total);
+        let cbumi_per_file = valmap_ref(
+            |busfile|{
+            println!("determine size of iterator {busfile}");
+                BusIteratorBuffered::new(busfile).groupby_cbumi().count()
+            },
+            &busnames);
+        
+        let total:usize = cbumi_per_file.values().sum(); // worst case scenario where there's no overlap entirely!
+        println!("total records {:?}", cbumi_per_file);
+
         let bar = get_progressbar(total as u64);
 
         let multi_iter = CellUmiIteratorMulti::new(&busnames);
@@ -248,7 +247,7 @@ impl PhantomPosterior{
             }
 
             // counting
-            for (sname, rvector) in record_dict.iter(){
+            for (sname, rvector) in &record_dict{
                 let v = records_original.entry(sname.to_string()).or_insert(0);
                 *v+=rvector.len();
 
@@ -290,7 +289,7 @@ impl PhantomPosterior{
                     *v += r.COUNT as usize;
                     
                     // write the filtered reads into the "remove" files
-                    for s in self.order.iter(){
+                    for s in &self.order{
                         if *s != sample_max{
                             // if that sample has the molecules, its a phantom
                             if let Some(r) = rd.get(s){
@@ -323,24 +322,24 @@ impl PhantomPosterior{
         // println!("{records_multi_finger}/{records_total} records were mutli");
 
 
-        for s in self.order.iter(){
+        for s in &self.order{
             let ro = records_original.get(s).unwrap_or(&0);
             let rr =records_written.get(s).unwrap_or(&0);
             let rf = records_filtered.get(s).unwrap_or(&0);
             let total = rr+rf;
             println!(
                 "{s} records: orig: {ro}, written {rr}, filtered {rf}, summed: {total}"
-            )
+            );
         }
         println!("=============================");
-        for s in self.order.iter(){
+        for s in &self.order{
             let ro = reads_original.get(s).unwrap_or(&0);
             let rr =reads_written.get(s).unwrap_or(&0);
             let rf = reads_filtered.get(s).unwrap_or(&0);
             let total = rr+rf;
             println!(
                 "{s} reads: orig: {ro}, written {rr}, filtered {rf}, summed: {total}"
-            )
+            );
         }
 
 
@@ -437,9 +436,9 @@ mod testing{
             ("s3".to_string(), BusFolder{foldername: d3, ec2gene: es6}),
         ]);
         post.filter_busfiles(
-            busfolders, 
-            filtered_bus, 
-            removed_bus, 
+            &busfolders, 
+            &filtered_bus, 
+            &removed_bus, 
             0.99
         );
         println!("============================");
@@ -489,9 +488,9 @@ mod testing{
             ("s2".to_string(), BusFolder::new(fname2.clone(),t2g)),
         ]);
         post.filter_busfiles(
-            busfolders, 
-            filtered_bus, 
-            removed_bus, 
+            &busfolders, 
+            &filtered_bus, 
+            &removed_bus, 
             0.99
         );
 

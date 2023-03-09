@@ -109,11 +109,11 @@ fn main() {
 
             println!("Filtering");
             posterior.filter_busfiles(
-                inputfolder_dict, 
-                named_outfiles, 
-                named_removed,
+                &inputfolder_dict, 
+                &named_outfiles, 
+                &named_removed,
                 args.threshold
-            )
+            );
         }        
     }
 }

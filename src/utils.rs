@@ -31,7 +31,7 @@ where
     F: Fn(&V)->V2,
     K: Eq + std::hash::Hash+Clone
 {
-    let r: HashMap<K,V2> = the_map.into_iter().map(|(k,v)| (k.clone(), fun(v))).collect();
+    let r: HashMap<K,V2> = the_map.iter().map(|(k,v)| (k.clone(), fun(v))).collect();
     r
 
 }

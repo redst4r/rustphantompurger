@@ -1,5 +1,5 @@
 use std::{collections::{HashMap, HashSet}, fs::File, io::{Write, BufReader, BufRead}, time::Instant, hash::Hash};
-use crate::{binomialreg::phantom_binomial_regression};
+use crate::{binomialreg::phantom_binomial_regression, utils::{valmap_ref}};
 use itertools::{izip, Itertools};
 use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::BusIteratorBuffered, iterators::{CbUmiGroupIterator, CellGroupIterator}};
 use rustbustools::io::{BusRecord, BusFolder};
@@ -17,16 +17,15 @@ pub fn detect_cell_overlap(busfolders: HashMap<String, String>, outfile: &str) {
     // with correlated #umis
 
     // figure out size of iterators, just for progress bar!
-    let mut total = 0;
-    // TODO: this doesnt check if the EC overlaps
-    for v in busfolders.values(){
-        println!("determine size of iterator");
-        let total_records = BusIteratorBuffered::new(v).groupby_cb().count();
-        if total< total_records{
-            total=total_records
-        }
-    }
-    println!("total records {}", total);
+    let cbs_per_file = valmap_ref(
+        |busfile|{
+        println!("determine size of iterator {busfile}");
+            BusIteratorBuffered::new(busfile).groupby_cb().count()
+        },
+        &busfolders);
+
+    println!("total records {:?}", cbs_per_file);
+    let total:usize = cbs_per_file.values().sum();
 
     let samplenames: Vec<String> = busfolders.keys().cloned().collect();
     let multi_iter = CellIteratorMulti::new(&busfolders);
@@ -395,16 +394,17 @@ pub fn make_fingerprint_histogram(busfolders: HashMap<String, BusFolder>) -> Fin
 pub fn _make_fingerprint_histogram(busnames: &HashMap<String, String>, ecmapper_dict: &HashMap<String, &Ec2GeneMapper>) -> FingerprintHistogram{
 
     // figure out size of iterators, just for progress bar!
-    let mut total = 0;
-    // TODO: this doesnt check if the EC overlaps
-    for v in busnames.values(){
-        println!("determine size of iterator");
-        let total_records = BusIteratorBuffered::new(v).groupby_cbumi().count();
-        if total< total_records{
-            total=total_records
-        }
-    }
-    println!("total records {}", total);
+
+    let cbumi_per_file = valmap_ref(
+        |busfile|{
+        println!("determine size of iterator {busfile}");
+            BusIteratorBuffered::new(busfile).groupby_cbumi().count()
+        },
+        busnames);
+    
+    let total:usize = cbumi_per_file.values().sum(); // worst case scenario where there's no overlap entirely!
+    println!("total records {:?}", cbumi_per_file);
+    
 
     // the actual workhorse, make_fingerprint_histogram is just a convenient wrapper
     let multi_iter = CellUmiIteratorMulti::new(busnames);
