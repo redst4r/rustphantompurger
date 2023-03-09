@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use rustbustools::io::BusFolder;
-use rustphantompurger::phantompurger;
+use rustphantompurger::{phantompurger, posterior};
 use clap::{self, Parser, Subcommand, Args};
 
 #[derive(Parser)]
@@ -105,7 +105,7 @@ fn main() {
             let fph = phantompurger::FingerprintHistogram::from_csv(&args.phantomcsv);
 
             println!("Building posterior");
-            let posterior = phantompurger::PhantomPosterior::new(&fph);
+            let posterior = posterior::PhantomPosterior::new(&fph);
 
             println!("Building busfolder dicts");
             let inputfolder_dict = named_infolders.iter()
