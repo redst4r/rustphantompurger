@@ -524,10 +524,10 @@ pub fn create_dummy_ec() ->Ec2GeneMapper{
 
 #[cfg(test)]
 pub mod tests{
-    use std::collections::{HashSet, HashMap};
-    use rustbustools::{consistent_genes::Ec2GeneMapper, io::{BusRecord, BusFolder, setup_busfile, BusIteratorBuffered}, iterators::CbUmiGroupIterator};
+    use std::collections::{HashMap};
+    use rustbustools::{consistent_genes::Ec2GeneMapper, io::{BusRecord, BusFolder}};
     use statrs::assert_almost_eq;
-    use crate::{posterior::PhantomPosterior, phantompurger::create_dummy_ec};
+    use crate::{phantompurger::create_dummy_ec};
 
     use super::{_make_fingerprint_histogram, make_fingerprint_simple, groupby_gene_even_simpler, FingerprintHistogram, groupby_gene_across_samples};
     use super::{make_fingerprint_histogram, detect_cell_overlap};

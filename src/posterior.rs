@@ -14,7 +14,7 @@ pub struct PhantomPosterior{
     order: Vec<String>,
     pi_norm: HashMap<(AmpFactor, String), f64>,
     p_no_hop: f64,
-    vr_norm: HashMap<(AmpFactor, String), f64>
+    // vr_norm: HashMap<(AmpFactor, String), f64>
 }
 
 
@@ -120,7 +120,7 @@ impl PhantomPosterior{
             order,
             pi_norm: pi_renorm,  // for each fingerprint a vector of posterior probs
             p_no_hop: p,
-            vr_norm
+            // vr_norm
         }
     }
 
@@ -132,40 +132,20 @@ impl PhantomPosterior{
 
         let r = AmpFactor(fingerprint.iter().sum());
 
-        let linear = false;
+        let mut logposterior: Vec<f64> = Vec::with_capacity(self.order.len());
+        let logbase = (n_samples-1.0).ln() - ((1.0/ self.p_no_hop) -1.0).ln();
+        for (sname, y) in izip![self.order.iter(), fingerprint.iter() ]{
 
-        if linear{
-            panic!("creates overflows!");
-            let mut posterior: Vec<f64> = Vec::with_capacity(self.order.len());
-            let base = (n_samples-1.0)/((1.0/ self.p_no_hop) -1.0);
-
-            for (sname, y) in izip![self.order.iter(), fingerprint.iter() ]{
-
-                let pi = *self.pi_norm.get(&(r, sname.to_string())).unwrap_or_else(|| panic!("Unknown {} {}", sname,r.0));
-                let post = base.powi(*y as i32) * pi;
-                posterior.push(post);
-            }
-            let norm_constant: f64 = posterior.iter().sum();
-            let posterior_normed: Vec<f64> = posterior.iter().map(|v| (v/norm_constant)).collect();
-            posterior_normed
+            let pi = *self.pi_norm.get(&(r, sname.to_string())).unwrap_or_else(|| panic!("Unknown {} {}", sname,r.0));
+            let logpi = pi.ln();
+            let logpost = (*y as f64)*logbase + logpi;
+            logposterior.push(logpost);
         }
-        else{ // log posterior, preventing overflows
+        let norm_constant: f64 = logsumexp(&logposterior);
+        let logposterior_normed: Vec<f64> = logposterior.iter().map(|v| (v-norm_constant)).collect();
 
-            let mut logposterior: Vec<f64> = Vec::with_capacity(self.order.len());
-            let logbase = (n_samples-1.0).ln() - ((1.0/ self.p_no_hop) -1.0).ln();
-            for (sname, y) in izip![self.order.iter(), fingerprint.iter() ]{
-
-                let pi = *self.pi_norm.get(&(r, sname.to_string())).unwrap_or_else(|| panic!("Unknown {} {}", sname,r.0));
-                let logpi = pi.ln();
-                let logpost = (*y as f64)*logbase + logpi;
-                logposterior.push(logpost);
-            }
-            let norm_constant: f64 = logsumexp(&logposterior);
-            let logposterior_normed: Vec<f64> = logposterior.iter().map(|v| (v-norm_constant)).collect();
-
-            let posterior_normed: Vec<f64> = logposterior_normed.iter().map(|x| x.exp()).collect();
-            posterior_normed
-        }
+        let posterior_normed: Vec<f64> = logposterior_normed.iter().map(|x| x.exp()).collect();
+        posterior_normed
     }
 
     pub fn posterior(&self, fingerprint: Fingerprint) -> HashMap<String, f64>{
