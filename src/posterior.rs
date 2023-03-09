@@ -279,34 +279,32 @@ impl PhantomPosterior{
                 // otherwise drop the molecule in all samples
                 if pmax > posterior_threshold {
                     let wr = buswriters.get_mut(&sample_max).unwrap();
-                    let r = record_dict.get(&sample_max).unwrap();
-                    wr.write_records(r);
+                    let r = rd.get(&sample_max).unwrap();
+                    wr.write_record(r);
                     records_resolved+=1;
 
 
                     let v = records_written.entry(sample_max.to_string()).or_insert(0);
-                    *v+=r.len();
+                    *v+=1;
     
                     let v = reads_written.entry(sample_max.to_string()).or_insert(0);
-                    let nreads: usize = r.iter().map(|r|r.COUNT as usize).sum();
-                    *v += nreads;
+                    *v += r.COUNT as usize;
                     
 
                     // write the filtered reads into the "remove" files
                     for s in self.order.iter(){
                         if *s != sample_max{
                             // if that sample has the molecules, its a phantom
-                            if let Some(r) = record_dict.get(s){
+                            if let Some(r) = rd.get(s){
                                 let wr = buswriters_removed.get_mut(s).unwrap();
-                                wr.write_records(r); 
+                                wr.write_record(r); 
 
 
                                 let v = records_filtered.entry(s.to_string()).or_insert(0);
-                                *v+=r.len();
+                                *v+=1;
                 
                                 let v = reads_filtered.entry(s.to_string()).or_insert(0);
-                                let nreads: usize = r.iter().map(|r|r.COUNT as usize).sum();
-                                *v += nreads;
+                                *v += r.COUNT as usize;
                             }
                         }
                     }
