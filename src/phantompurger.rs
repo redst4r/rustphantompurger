@@ -1,5 +1,6 @@
 use std::{collections::{HashMap, HashSet}, fs::File, io::{Write, BufReader, BufRead}, time::Instant, hash::Hash};
 use crate::{binomialreg::phantom_binomial_regression, utils::{valmap_ref}};
+use flate2::{Compression, write::GzEncoder};
 use itertools::{izip, Itertools};
 use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::BusReader, iterators::{CbUmiGroupIterator, CellGroupIterator}};
 use rustbustools::io::{BusRecord, BusFolder};
@@ -11,10 +12,14 @@ use rustbustools::disjoint::DisjointSubsets;
 #[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug,Copy)]
 pub struct CB(u64);
 
-pub fn detect_cell_overlap(busfolders: HashMap<String, String>, outfile: &str) {
+pub fn detect_cell_overlap(busfolders: &HashMap<String, String>, outfile: &str) {
     // for each CB calcualte the number of UMIs per experiment/busfile
     // if extensive swapping has occured, we'll see shared CBs across experiments
     // with correlated #umis
+
+    if !outfile.ends_with(".csv") && !outfile.ends_with(".csv.gz"){
+        panic!("unknwon file extension. must be either .csv or .csv.gz")
+    }
 
     // figure out size of iterators, just for progress bar!
     let cbs_per_file = valmap_ref(
@@ -22,13 +27,13 @@ pub fn detect_cell_overlap(busfolders: HashMap<String, String>, outfile: &str) {
         println!("determine size of iterator {busfile}");
             BusReader::new(busfile).groupby_cb().count()
         },
-        &busfolders);
+        busfolders);
 
     println!("total records {:?}", cbs_per_file);
     let total:usize = cbs_per_file.values().sum();
 
     let samplenames: Vec<String> = busfolders.keys().cloned().collect();
-    let multi_iter = CellIteratorMulti::new(&busfolders);
+    let multi_iter = CellIteratorMulti::new(busfolders);
     let mut result: HashMap<CB, Vec<usize>> = HashMap::new();
 
     let bar = get_progressbar(total as u64);
@@ -52,19 +57,38 @@ pub fn detect_cell_overlap(busfolders: HashMap<String, String>, outfile: &str) {
         }
     };
     
-    // write to file
-    // TODO could be inlined into the above code to instantly write
-    let mut fh = File::create(outfile).unwrap();
-    let mut header = samplenames.join(",");
-    header.push_str(",CB");
-    writeln!(fh, "{}", header).unwrap();
+    if outfile.ends_with(".csv"){
+        // write to file
+        // TODO could be inlined into the above code to instantly write
+        let mut fh = File::create(outfile).unwrap();
+        let mut header = samplenames.join(",");
+        header.push_str(",CB");
+        writeln!(fh, "{}", header).unwrap();
 
-    for (cid, numis) in result.iter(){
-        // concat with commas
-        let mut s = numis.iter().map(|i| i.to_string()).collect::<Vec<String>>().join(",");
-        s.push_str(&format!(",{}", cid.0));
-        writeln!(fh, "{}", s).unwrap();
-    }  
+        for (cid, numis) in result.iter(){
+            // concat with commas
+            let mut s = numis.iter().map(|i| i.to_string()).collect::<Vec<String>>().join(",");
+            s.push_str(&format!(",{}", cid.0));
+            writeln!(fh, "{}", s).unwrap();
+        }  
+    }
+    else if  outfile.ends_with(".csv.gz"){
+        // write compressed
+        let fh = File::create(&format!("{outfile}.gz")).unwrap();
+        let mut e = GzEncoder::new(fh, Compression::default());
+        let mut header = samplenames.join(",");
+        header.push_str(",CB\n");
+        e.write_all(header.as_bytes()).unwrap();
+        for (cid, numis) in result.iter(){
+            // concat with commas
+            let mut s = numis.iter().map(|i| i.to_string()).collect::<Vec<String>>().join(",");
+            s.push_str(&format!(",{}\n", cid.0));
+            e.write_all(s.as_bytes()).unwrap();
+        }             
+    }
+    else{
+        panic!("unknwon file extension. must be either .csv or .csv.gz")
+    }
 }
 
 
@@ -765,6 +789,21 @@ pub mod tests{
 
         s.to_csv("/tmp/testing2.csv");
         println!("{:?}", s)
+    }
+
+    #[test]
+    fn test_detect_overlap(){
+        let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0};
+        let r2 = BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 3, FLAG: 0};
+        let (fname1, d1) = setup_busfile(&vec![r1]);
+        let (fname2, d2) = setup_busfile(&vec![r2]);
+        let busfolders = HashMap::from([
+            ("s1".to_string(), fname1.clone()),
+            ("s2".to_string(), fname2.clone())
+        ]);
+        println!("{}", fname1);
+        detect_cell_overlap(&busfolders, "/tmp/overlap.csv");
+        detect_cell_overlap(&busfolders, "/tmp/overlap.csv.gz");
     }
 
     // #[test]

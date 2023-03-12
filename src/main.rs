@@ -80,7 +80,7 @@ fn main() {
         MyCommand::phantomCB(args) => {
             println!("Doing phnatom CB overlap");
             let named_infolders= parse_key_value_args(&args.busfolders);
-            phantompurger::detect_cell_overlap(named_infolders, &cli.output);
+            phantompurger::detect_cell_overlap(&named_infolders, &cli.output);
         }
         MyCommand::phantomEstimate(args) => {
             println!("Doing phantom SIHR estimation");
