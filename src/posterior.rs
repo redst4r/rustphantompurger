@@ -1,10 +1,9 @@
 use std::{collections::{HashMap}, hash::Hash};
 use crate::{utils::{logsumexp, valmap_ref}, phantompurger::{FingerprintHistogram, Fingerprint, groupby_gene_across_samples, make_fingerprint_simple}};
 use itertools::{izip};
-use rustbustools::{bus_multi::{CellUmiIteratorMulti}, io::{BusIteratorBuffered}, iterators::CbUmiGroupIterator};
+use rustbustools::{bus_multi::{CellUmiIteratorMulti}, io::{BusReader}, iterators::CbUmiGroupIterator};
 use rustbustools::io::{BusFolder, BusWriter};
 use rustbustools::utils::{get_progressbar, argsort::argmax_float};
-
 
 
 #[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug, Copy)]
@@ -216,7 +215,7 @@ impl PhantomPosterior{
         let cbumi_per_file = valmap_ref(
             |busfile|{
             println!("determine size of iterator {busfile}");
-                BusIteratorBuffered::new(busfile).groupby_cbumi().count()
+                BusReader::new(busfile).groupby_cbumi().count()
             },
             &busnames);
         

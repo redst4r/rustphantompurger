@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, fs::File, io::{Write, BufReader, BufRead}, time::Instant, hash::Hash};
 use crate::{binomialreg::phantom_binomial_regression, utils::{valmap_ref}};
 use itertools::{izip, Itertools};
-use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::BusIteratorBuffered, iterators::{CbUmiGroupIterator, CellGroupIterator}};
+use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::BusReader, iterators::{CbUmiGroupIterator, CellGroupIterator}};
 use rustbustools::io::{BusRecord, BusFolder};
 use rustbustools::utils::{get_progressbar};
 use rustbustools::consistent_genes::Ec2GeneMapper;
@@ -20,7 +20,7 @@ pub fn detect_cell_overlap(busfolders: HashMap<String, String>, outfile: &str) {
     let cbs_per_file = valmap_ref(
         |busfile|{
         println!("determine size of iterator {busfile}");
-            BusIteratorBuffered::new(busfile).groupby_cb().count()
+            BusReader::new(busfile).groupby_cb().count()
         },
         &busfolders);
 
@@ -76,7 +76,7 @@ pub fn detect_overlap(busfolders: HashMap<String, String>) -> HashMap<Vec<String
     // TODO: this doesnt check if the EC overlaps
     for v in busfolders.values(){
         println!("determine size of iterator");
-        let total_records = BusIteratorBuffered::new(v).groupby_cbumi().count();
+        let total_records = BusReader::new(v).groupby_cbumi().count();
         if total< total_records{
             total=total_records
         }
@@ -398,7 +398,7 @@ pub fn _make_fingerprint_histogram(busnames: &HashMap<String, String>, ecmapper_
     let cbumi_per_file = valmap_ref(
         |busfile|{
         println!("determine size of iterator {busfile}");
-            BusIteratorBuffered::new(busfile).groupby_cbumi().count()
+            BusReader::new(busfile).groupby_cbumi().count()
         },
         busnames);
     
@@ -525,7 +525,7 @@ pub fn create_dummy_ec() ->Ec2GeneMapper{
 #[cfg(test)]
 pub mod tests{
     use std::collections::{HashMap};
-    use rustbustools::{consistent_genes::Ec2GeneMapper, io::{BusRecord, BusFolder}};
+    use rustbustools::{consistent_genes::Ec2GeneMapper, io::{BusRecord, BusFolder, setup_busfile}};
     use statrs::assert_almost_eq;
     use crate::{phantompurger::create_dummy_ec};
 
@@ -783,7 +783,7 @@ pub mod tests{
             ("short".to_string(), "/home/michi/bus_testing/bus_output_short/output.corrected.sort.bus".to_string())
         ]);
 
-        detect_cell_overlap(busfolders, "/tmp/test_detect_cell_overlap.csv")
+        detect_cell_overlap(&busfolders, "/tmp/test_detect_cell_overlap.csv")
     }
 
     #[test]
