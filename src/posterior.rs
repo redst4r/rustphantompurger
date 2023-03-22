@@ -168,6 +168,7 @@ impl PhantomPosterior{
         &self, input_busfolders: &HashMap<String, BusFolder>, 
         output_busfolders: &HashMap<String, String>,
         output_removed: &HashMap<String, String>,
+        output_ambiguous: &HashMap<String, String>,
         posterior_threshold: f64
     ){
         // for each fingerprint a vector of posterior probs
@@ -200,6 +201,18 @@ impl PhantomPosterior{
             .collect();
 
         let mut buswriters_removed: HashMap<String,BusWriter> = output_removed.iter()
+            .map(|(sname, fname)| 
+                (
+                    sname.to_owned(), 
+                    BusWriter::new(
+                        fname, 
+                        input_busfolders.get(sname).unwrap().get_bus_header()
+                    )
+                ) 
+            )
+            .collect();
+
+        let mut buswriters_ambigous: HashMap<String,BusWriter> = output_ambiguous.iter()
             .map(|(sname, fname)| 
                 (
                     sname.to_owned(), 
@@ -305,6 +318,11 @@ impl PhantomPosterior{
                     }
                 }
                 else{
+                    for (sname, record) in rd{
+                        let wr = buswriters_ambigous.get_mut(&sname).unwrap();
+                        wr.write_record(&record); 
+
+                    }
                     // couldnt find clear source sample, just write them back untouched
                     records_ambiguous+=1;
                     // for s in self.order.iter(){
@@ -429,6 +447,11 @@ mod testing{
             ("s2".to_string(), "/tmp/s2_removed.bus".to_string()),
             ("s3".to_string(), "/tmp/s3_removed.bus".to_string()),
         ]);        
+        let ambigous_bus = HashMap::from([
+            ("s1".to_string(), "/tmp/s1_ambigous.bus".to_string()),
+            ("s2".to_string(), "/tmp/s2_ambigous.bus".to_string()),
+            ("s3".to_string(), "/tmp/s3_ambigous.bus".to_string()),
+        ]); 
         let busfolders = HashMap::from([
             ("s1".to_string(), BusFolder{foldername: d1, ec2gene: es4}),
             ("s2".to_string(), BusFolder{foldername: d2, ec2gene: es5}),
@@ -438,6 +461,7 @@ mod testing{
             &busfolders, 
             &filtered_bus, 
             &removed_bus, 
+            &ambigous_bus,
             0.99
         );
         println!("============================");
@@ -481,7 +505,11 @@ mod testing{
         let removed_bus = HashMap::from([
             ("s1".to_string(), "/tmp/s1_removed.bus".to_string()),
             ("s2".to_string(), "/tmp/s2_removed.bus".to_string()),
-        ]);        
+        ]);       
+        let amb_bus = HashMap::from([
+            ("s1".to_string(), "/tmp/s1_ambigous.bus".to_string()),
+            ("s2".to_string(), "/tmp/s2_ambigous.bus".to_string()),
+        ]);  
         let busfolders = HashMap::from([
             ("s1".to_string(), BusFolder::new(fname1, t2g)),
             ("s2".to_string(), BusFolder::new(fname2.clone(),t2g)),
@@ -490,6 +518,7 @@ mod testing{
             &busfolders, 
             &filtered_bus, 
             &removed_bus, 
+            &amb_bus,
             0.99
         );
 

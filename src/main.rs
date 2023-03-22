@@ -55,8 +55,11 @@ struct PhantomFilterArgs{
     outfiles: String,
 
     #[clap(long= "removed")]
-    removed: String,    
-    
+    removed: String, 
+
+    #[clap(long= "ambiguous")]
+    ambiguous: String, 
+
     #[clap(long= "threshold")]
     threshold: f64,
 
@@ -95,9 +98,11 @@ fn main() {
             let named_infolders= parse_key_value_args(&args.infolders);
             let named_outfiles= parse_key_value_args(&args.outfiles);
             let named_removed= parse_key_value_args(&args.removed);
+            let named_ambiguous= parse_key_value_args(&args.ambiguous);
             println!("Infiles: {:?}",named_infolders);
             println!("outfiles: {:?}",named_outfiles);
             println!("named_removed: {:?}",named_removed);
+            println!("named_ambiguous: {:?}",named_ambiguous);
 
             let fph = phantompurger::FingerprintHistogram::from_csv(&args.phantomcsv);
 
@@ -112,6 +117,7 @@ fn main() {
                 &inputfolder_dict, 
                 &named_outfiles, 
                 &named_removed,
+                &named_ambiguous,
                 args.threshold
             );
         }        
