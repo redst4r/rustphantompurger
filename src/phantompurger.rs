@@ -307,7 +307,12 @@ pub fn groupby_gene_across_samples(
             let freq = recordlist.iter().map(|r| r.COUNT).sum();
             let mut rnew = recordlist.get(0).unwrap().clone();
             rnew.COUNT = freq;
-            rnew.EC = the_gene; 
+
+            // bad idea here: this turns the BusRecord into something not quantifiable by bustools!!
+            // rnew.EC = the_gene;  
+            // rather just leave the EC as is. It's guaranteed to be consistent eith the_gene
+            // but might not be unique to the_gene
+            // TODO: figure out a EC that maps ONLY to the_gene
             sample_grouped_aggr.insert(s.to_string(), rnew);
         }
         emit_vector.push(sample_grouped_aggr);
