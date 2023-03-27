@@ -168,6 +168,8 @@ impl PhantomPosterior{
 
 
     fn find_MAP_sample(&mut self, fp: &Vec<u32>, posterior_threshold: f64) -> Option<String>{
+
+
         if !self.posterior_cache.contains_key(fp){
             let pvec = self.posterior_internal(fp);
             self.posterior_cache.insert(fp.clone(), pvec);
@@ -177,7 +179,19 @@ impl PhantomPosterior{
         let (ix, pmax) = argmax_float(posterior_vec);
         let sample_max = self.order[ix].clone();
 
-        if pmax > posterior_threshold {
+        // TODO: slight adaptation: 
+        // if the fingerprint is only a single sample
+        // lower the threshold
+        // If the read is only seen in a single sample
+        // it doesnt make alot of sense to assign it somewhere else
+        let mut threshold = posterior_threshold;
+
+        let n_samples = fp.iter().filter(|&x| *x>0).count();
+        if n_samples == 1{
+            threshold = 0.9;
+        }
+
+        if pmax > threshold {
             Some(sample_max)
         }
         else{
