@@ -107,7 +107,7 @@ fn main() {
             let fph = phantompurger::FingerprintHistogram::from_csv(&args.phantomcsv);
 
             println!("Building posterior");
-            let posterior = posterior::PhantomPosterior::new(&fph);
+            let mut posterior = posterior::PhantomPosterior::new(&fph);
 
             println!("Building busfolder dicts");
             let inputfolder_dict = valmap(|folder|BusFolder::new(&folder, &args.t2g), named_infolders);

@@ -13,6 +13,7 @@ pub struct PhantomPosterior{
     order: Vec<String>,
     pi_norm: HashMap<(AmpFactor, String), f64>,
     p_no_hop: f64,
+    posterior_cache: HashMap<Vec<u32>, Vec<f64>>  
     // vr_norm: HashMap<(AmpFactor, String), f64>
 }
 
@@ -114,11 +115,12 @@ impl PhantomPosterior{
 
         // map_to_file(&pi_renorm, "/tmp/pi_renorm.csv");
 
-        // let posterior_cache = HashMap::new();
+        let posterior_cache = HashMap::new();
         PhantomPosterior{
             order,
             pi_norm: pi_renorm,  // for each fingerprint a vector of posterior probs
             p_no_hop: p,
+            posterior_cache
             // vr_norm
         }
     }
@@ -164,16 +166,32 @@ impl PhantomPosterior{
         posterior_map
     }
 
+
+    fn find_MAP_sample(&mut self, fp: &Vec<u32>, posterior_threshold: f64) -> Option<String>{
+        if !self.posterior_cache.contains_key(fp){
+            let pvec = self.posterior_internal(fp);
+            self.posterior_cache.insert(fp.clone(), pvec);
+        }
+        let posterior_vec = self.posterior_cache.get(fp).unwrap();
+
+        let (ix, pmax) = argmax_float(posterior_vec);
+        let sample_max = self.order[ix].clone();
+
+        if pmax > posterior_threshold {
+            Some(sample_max)
+        }
+        else{
+            None
+        }
+    }
+
     pub fn filter_busfiles(
-        &self, input_busfolders: &HashMap<String, BusFolder>, 
+        &mut self, input_busfolders: &HashMap<String, BusFolder>, 
         output_busfolders: &HashMap<String, String>,
         output_removed: &HashMap<String, String>,
         output_ambiguous: &HashMap<String, String>,
         posterior_threshold: f64
     ){
-        // for each fingerprint a vector of posterior probs
-        let mut posterior_cache: HashMap<Vec<u32>, Vec<f64>> = HashMap::new();  
-
         // create the EC2gene mappers
         let ecmapper_dict = input_busfolders.iter()
         .map(|(samplename, bfolder)|
@@ -278,17 +296,9 @@ impl PhantomPosterior{
                 let fp:  &Vec<_>  = &self.order.iter()
                     .map(|s| fp_hash.get(s).unwrap_or(&0)).cloned().collect();
 
-                if !posterior_cache.contains_key(fp){
-                    let pvec = self.posterior_internal(fp);
-                    posterior_cache.insert(fp.clone(), pvec);
-                }
-                let posterior_vec = posterior_cache.get(fp).unwrap();
-
-                let (ix, pmax) = argmax_float(posterior_vec);
-                let sample_max = self.order[ix].clone();
                 // if we find an unambiguous assignment, write the molecule to that sample
                 // otherwise drop the molecule in all samples
-                if pmax > posterior_threshold {
+                if let Some(sample_max) = self.find_MAP_sample(fp, posterior_threshold){
                     let wr = buswriters.get_mut(&sample_max).unwrap();
                     let r = rd.get(&sample_max).unwrap();
                     wr.write_record(r);
@@ -435,7 +445,7 @@ mod testing{
         let fph = make_fingerprint_histogram(busfolders);
         println!("{:?}", fph.histogram);
 
-        let post = PhantomPosterior::new(&fph);
+        let mut post = PhantomPosterior::new(&fph);
 
         let filtered_bus = HashMap::from([
             ("s1".to_string(), "/tmp/s1_filtered.bus".to_string()),
@@ -496,7 +506,7 @@ mod testing{
         ]);
 
         let fph = make_fingerprint_histogram(busfolders);
-        let post = PhantomPosterior::new(&fph);
+        let mut post = PhantomPosterior::new(&fph);
 
         let filtered_bus = HashMap::from([
             ("s1".to_string(), "/tmp/s1_filtered.bus".to_string()),
