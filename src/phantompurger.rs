@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}, fs::File, io::{Write, BufReader, BufR
 use crate::{binomialreg::phantom_binomial_regression, utils::{valmap_ref}};
 use flate2::{Compression, write::GzEncoder};
 use itertools::{izip, Itertools};
-use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::BusReader, iterators::{CbUmiGroupIterator, CellGroupIterator}};
+use rustbustools::{bus_multi::{CellUmiIteratorMulti, CellIteratorMulti}, io::BusReader, iterators::{CbUmiGroupIterator, CellGroupIterator}, consistent_genes::{EC, GeneId, Genename}};
 use rustbustools::io::{BusRecord, BusFolder};
 use rustbustools::utils::{get_progressbar};
 use rustbustools::consistent_genes::Ec2GeneMapper;
@@ -265,12 +265,12 @@ pub fn groupby_gene_across_samples(
     
     // give each element in record_dict a unique name ( the key)
     // and store i) the element itself, ii) its genes iii) its samplename
-    let mut big_hash:HashMap<String, (&BusRecord, String, &HashSet<u32>)> = HashMap::with_capacity(record_dict.len());
+    let mut big_hash:HashMap<String, (&BusRecord, String, &HashSet<GeneId>)> = HashMap::with_capacity(record_dict.len());
     let mut id_counter: i32 = 0;
     for (sname, records) in record_dict.iter(){
         let ecmapper = ecmapper_dict.get(sname).unwrap();
         for r in records{
-            let g = ecmapper.get_genes(r.EC);
+            let g = ecmapper.get_genes(EC(r.EC));
             let id_str = id_counter.to_string();
             big_hash.insert(id_str, (r, sname.clone(), g ));
             id_counter+= 1;
@@ -285,13 +285,15 @@ pub fn groupby_gene_across_samples(
 
     // build the emitted dict
     let mut emit_vector: Vec<HashMap<String, BusRecord>> = Vec::new();
-    for (ids_of_set_elements, geneset) in disjoint_set.get_disjoint_set_ids_and_set(){
+    for (ids_of_set_elements, _geneset) in disjoint_set.get_disjoint_set_ids_and_set(){
         // these are now all records across the samples that map to the same gene
         // evne if there's multiple records per sample, they can be aggregated into
         // a single record
 
         // group the records by sample, aggregate
-        let the_gene = *geneset.iter().next().unwrap(); // rbitrarily choose the first consissnt gene to mark in busrecords
+
+        // deprecated:
+        // let the_gene = *geneset.iter().next().unwrap(); // rbitrarily choose the first consissnt gene to mark in busrecords
 
         let mut sample_grouped: HashMap<String, Vec<BusRecord>> = HashMap::new();
         for el_id in ids_of_set_elements{
@@ -427,16 +429,16 @@ pub fn make_fingerprint_simple(record_dict: &HashMap<String,BusRecord>) -> Finge
 
 
 pub fn create_dummy_ec() ->Ec2GeneMapper{
-    let ec0: HashSet<String> = vec!["A".to_string()].into_iter().collect();
-    let ec1: HashSet<String> = vec!["B".to_string()].into_iter().collect();
-    let ec2: HashSet<String> = vec!["A".to_string(), "B".to_string()].into_iter().collect();
-    let ec3: HashSet<String> = vec!["C".to_string(), "D".to_string()].into_iter().collect();
+    let ec0: HashSet<Genename> = vec![Genename("A".to_string())].into_iter().collect();
+    let ec1: HashSet<Genename> = vec![Genename("B".to_string())].into_iter().collect();
+    let ec2: HashSet<Genename> = vec![Genename("A".to_string()), Genename("B".to_string())].into_iter().collect();
+    let ec3: HashSet<Genename> = vec![Genename("C".to_string()), Genename("D".to_string())].into_iter().collect();
 
-    let ec_dict: HashMap<u32, HashSet<String>> = HashMap::from([
-        (0, ec0), // A
-        (1, ec1), // B
-        (2, ec2), // A,B
-        (3, ec3), // C,D
+    let ec_dict: HashMap<EC, HashSet<Genename>> = HashMap::from([
+        (EC(0), ec0), // A
+        (EC(1), ec1), // B
+        (EC(2), ec2), // A,B
+        (EC(3), ec3), // C,D
         ]);
     Ec2GeneMapper::new(ec_dict)
 }
