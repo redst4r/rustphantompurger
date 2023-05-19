@@ -166,7 +166,7 @@ impl PhantomPosterior{
         posterior_map
     }
 
-
+    #[allow(non_snake_case)]
     fn find_MAP_sample(&mut self, fp: &Vec<u32>, posterior_threshold: f64) -> Option<String>{
 
 

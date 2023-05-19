@@ -1,12 +1,12 @@
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
-pub fn logsumexp(x: &[f64]) -> f64{
+pub fn logsumexp(x: &[f64]) -> f64 {
     // logsumexp trick
 
     // getting the max, stupid f64, cant do .iter().max()
-    let c = x.iter().reduce(|a, b| if a>b {a} else {b}).unwrap();
+    let c = x.iter().reduce(|a, b| if a > b { a } else { b }).unwrap();
     let mut exp_vec: Vec<f64> = Vec::with_capacity(x.len()); // storing exp(x-c)
-    for el in x.iter(){
+    for el in x.iter() {
         exp_vec.push((el - c).exp());
     }
     let z: f64 = c + exp_vec.iter().sum::<f64>().ln();
@@ -15,29 +15,26 @@ pub fn logsumexp(x: &[f64]) -> f64{
 
 // Takes a Hashmap K->V and transforms all values, leaving the keys as they are
 // note that this consumes the hashmap!
-pub fn valmap<K,V,V2, F>(fun: F, the_map: HashMap<K, V>) -> HashMap<K,V2>
-where 
-    F: Fn(V)->V2,
-    K: Eq + std::hash::Hash
+pub fn valmap<K, V, V2, F>(fun: F, the_map: HashMap<K, V>) -> HashMap<K, V2>
+where
+    F: Fn(V) -> V2,
+    K: Eq + std::hash::Hash,
 {
-
-    let r: HashMap<K,V2> = the_map.into_iter().map(|(k,v)| (k, fun(v))).collect();
+    let r: HashMap<K, V2> = the_map.into_iter().map(|(k, v)| (k, fun(v))).collect();
     r
-
 }
 
-pub fn valmap_ref<K,V,V2, F>(fun: F, the_map: &HashMap<K, V>) -> HashMap<K,V2>
-where 
-    F: Fn(&V)->V2,
-    K: Eq + std::hash::Hash+Clone
+pub fn valmap_ref<K, V, V2, F>(fun: F, the_map: &HashMap<K, V>) -> HashMap<K, V2>
+where
+    F: Fn(&V) -> V2,
+    K: Eq + std::hash::Hash + Clone,
 {
-    let r: HashMap<K,V2> = the_map.iter().map(|(k,v)| (k.clone(), fun(v))).collect();
+    let r: HashMap<K, V2> = the_map.iter().map(|(k, v)| (k.clone(), fun(v))).collect();
     r
-
 }
 
 #[test]
-fn test_valmap(){
+fn test_valmap() {
     let h: HashMap<&str, usize> = vec![("A", 1), ("B", 2)].into_iter().collect();
 
     // basics
@@ -46,15 +43,13 @@ fn test_valmap(){
     assert_eq!(r.get("A").unwrap(), "1");
     assert_eq!(r.get("B").unwrap(), "2");
 
-
     // capturing some context
     let h: HashMap<&str, usize> = vec![("A", 1), ("B", 2)].into_iter().collect();
     let inc = 10_usize;
-    let r = valmap(|x| x+inc, h);
+    let r = valmap(|x| x + inc, h);
 
     assert_eq!(*r.get("A").unwrap(), 11);
     assert_eq!(*r.get("B").unwrap(), 12);
-
 }
 
 // fn logfactorial(x: usize) -> f64{
@@ -89,27 +84,27 @@ fn test_valmap(){
 
 //     let logcoeff = log_binomial_coeff(n, x);
 //     (x as f64) * p.ln() + ((n-x) as f64) * (1.0-p).ln() + logcoeff
-    
+
 // }
 
-pub fn linspace(min: f64, max: f64, n: usize) -> Vec<f64>{
-    assert!(n>=2);    
-    let delta = (max-min)/((n-1) as f64);
+pub fn linspace(min: f64, max: f64, n: usize) -> Vec<f64> {
+    assert!(n >= 2);
+    let delta = (max - min) / ((n - 1) as f64);
     let mut x = Vec::with_capacity(n);
-    for i in 0..n{
-        let y = min + (i as f64)*delta;
+    for i in 0..n {
+        let y = min + (i as f64) * delta;
         x.push(y);
     }
     x
 }
 
-pub fn logspace(logmin: f64, logmax:f64, n:usize)-> Vec<f64> {
+pub fn logspace(logmin: f64, logmax: f64, n: usize) -> Vec<f64> {
     let logx = linspace(logmin, logmax, n);
     logx.into_iter().map(|y| 10_f64.powf(y)).collect()
 }
 
 #[cfg(test)]
-mod tests{
+mod tests {
 
     use crate::utils::{linspace, logspace};
 
@@ -151,14 +146,14 @@ mod tests{
     //     assert_eq!(
     //         binomial_loglike(1, 1, 1.0 ),
     //         1_f64.ln()
-    //     );   
+    //     );
     //     assert_eq!(
     //         binomial_loglike(0, 1, 0.0 ),
     //         1_f64.ln()
-    //     );  
+    //     );
     // }
     #[test]
-    fn test_linspace(){
+    fn test_linspace() {
         let min = 1.0;
         let max = 10.0;
         let n = 10;
@@ -170,8 +165,8 @@ mod tests{
     }
 
     #[test]
-    fn test_logspace(){
-        let logmin = 0.0;  
+    fn test_logspace() {
+        let logmin = 0.0;
         let logmax = 1.0;
         let n = 10;
         let x = logspace(logmin, logmax, n);
@@ -182,15 +177,14 @@ mod tests{
     }
 
     #[test]
-    fn test_logspace2(){
-        let logmin = -6.0;  
+    fn test_logspace2() {
+        let logmin = -6.0;
         let logmax = 0.0;
         let n = 7;
         let x = logspace(logmin, logmax, n);
-        println!("{:?}",x);
+        println!("{:?}", x);
         assert_eq!(x.len(), n);
         assert_eq!(*x.first().unwrap(), 1e-6);
         assert_eq!(*x.last().unwrap(), 1.0);
     }
-
 }
