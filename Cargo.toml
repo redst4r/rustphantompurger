@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-indicatif = "0.16"
-clap = { version = "3.1.18", features = ["derive"] }
+indicatif = "0.17"
+clap = { version = "4", features = ["derive"] }
 statrs = "0.16"
 itertools="0.10.5"
 rustbustools = { path = "/home/michi/Dropbox/rustbustools" }
