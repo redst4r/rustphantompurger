@@ -2,7 +2,7 @@ use crate::{binomialreg::phantom_binomial_regression, utils::valmap_ref};
 use flate2::{write::GzEncoder, Compression};
 use itertools::{izip, Itertools};
 use rustbustools::consistent_genes::Ec2GeneMapper;
-use rustbustools::disjoint::DisjointSubsets;
+use crate::disjoint::DisjointSubsets;
 use rustbustools::io::{BusFolder, BusRecord};
 use rustbustools::utils::get_progressbar;
 use rustbustools::{
@@ -249,7 +249,7 @@ impl FingerprintHistogram {
             *v += freq;
         }
 
-        let mut r: Vec<usize> = m_r.iter().map(|(k, _v)| k.to_owned() as usize).collect();
+        let mut r: Vec<usize> = m_r.keys().map(|k| k.to_owned()).collect();
         r.sort();
 
         let z: Vec<usize> = r.iter().map(|x| *z_r.get(x).unwrap_or(&0)).collect(); // in case there's not a single non-chimeric molecule at amplification r, return 0
@@ -641,8 +641,8 @@ pub mod tests {
     fn test_detect_overlap() {
         let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0};
         let r2 = BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 3, FLAG: 0};
-        let (fname1, d1) = setup_busfile(&vec![r1]);
-        let (fname2, d2) = setup_busfile(&vec![r2]);
+        let (fname1, _d1) = setup_busfile(&vec![r1]);
+        let (fname2, _d2) = setup_busfile(&vec![r2]);
         let busfolders = HashMap::from([
             ("s1".to_string(), fname1.clone()),
             ("s2".to_string(), fname2.clone()),
