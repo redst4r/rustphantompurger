@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use rustbustools::{io::BusFolder};
-use rustphantompurger::{phantompurger, posterior, utils::{valmap}};
+use bustools::io::BusFolder;
+use rustphantompurger::{phantompurger, posterior, utils::{valmap}, cb_overlap};
 use clap::{self, Parser, Subcommand, Args};
 
 #[derive(Parser)]
@@ -25,44 +25,56 @@ enum MyCommand {
 }
 #[derive(Args)]
 struct PhantomArgs{
+    /// Input bus folder
     #[clap(long= "infolders")]
     busfolders: String,
+
+    /// Trasncript to gene file
     #[clap(long= "t2g")] 
     t2g: String, 
 }
 
 #[derive(Args)]
 struct PhantomCBArgs{
+    /// Input bus folder
     #[clap(long= "infolders")]
     busfolders: String,
 }
 
 #[derive(Args)]
 struct PhantomEstArgs{
+    /// Phantom CSV file
     #[clap(long= "csv")]
     phantomcsv: String,
 }
 
 #[derive(Args)]
 struct PhantomFilterArgs{
+    /// Phantom CSV file
     #[clap(long= "csv")]
     phantomcsv: String,
 
+    /// input bus folders
     #[clap(long= "infolders")]
     infolders: String,
 
+    /// output bus folders, filtered for hopped reads
     #[clap(long= "outfiles")]
     outfiles: String,
 
+    /// bus folders containing the hopped reads
     #[clap(long= "removed")]
     removed: String, 
 
+    /// bus folders containing the ambiguous reads
     #[clap(long= "ambiguous")]
     ambiguous: String, 
 
+    /// posterior threshold: When assigning a read to a sample, posterior probability < threshold will make the read ambiguous
     #[clap(long= "threshold")]
     threshold: f64,
 
+    /// Trasncript to gene file
     #[clap(long= "t2g")] 
     t2g: String, 
 }
@@ -83,7 +95,7 @@ fn main() {
         MyCommand::phantomCB(args) => {
             println!("Doing phnatom CB overlap");
             let named_infolders= parse_key_value_args(&args.busfolders);
-            phantompurger::detect_cell_overlap(&named_infolders, &cli.output);
+            cb_overlap::detect_cell_overlap(&named_infolders, &cli.output);
         }
         MyCommand::phantomEstimate(args) => {
             println!("Doing phantom SIHR estimation");
@@ -124,11 +136,11 @@ fn main() {
     }
 }
 
-fn parse_key_value_args(s: &str) -> HashMap<String,String>{
 
-    // we supply key:value args on the command line via this syntax:
-    // k1:v1 k2:v2 ....
-    // parse into dict
+/// we supply key:value args on the command line via this syntax:
+/// k1:v1 k2:v2 ....
+/// parse into dict
+fn parse_key_value_args(s: &str) -> HashMap<String,String>{
     let mut the_map = HashMap::new();
 
     for pair in  s.split(' '){
@@ -145,5 +157,4 @@ fn parse_key_value_args(s: &str) -> HashMap<String,String>{
 
 /*
 cargo run --release -- --output /dev/null phantom-estimate --csv /home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv
-
  */

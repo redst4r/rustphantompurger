@@ -1,16 +1,16 @@
-use std::{collections::{HashMap}, hash::Hash};
+use std::{collections::HashMap, hash::Hash};
 use crate::{utils::{logsumexp, valmap_ref}, phantompurger::{FingerprintHistogram, Fingerprint, groupby_gene_across_samples, make_fingerprint_simple}};
-use itertools::{izip};
-use rustbustools::{bus_multi::{CellUmiIteratorMulti}, io::{BusReader}, iterators::CbUmiGroupIterator};
-use rustbustools::io::{BusFolder, BusWriter};
-use rustbustools::utils::{get_progressbar, argsort::argmax_float};
+use itertools::izip;
+use bustools::{bus_multi::CellUmiIteratorMulti, io::BusReader, iterators::CbUmiGroupIterator};
+use bustools::io::{BusFolder, BusWriter};
+use bustools::utils::{get_progressbar, argsort::argmax_float};
 
 
 #[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug, Copy)]
 pub struct AmpFactor(u32);
 
 pub struct PhantomPosterior{
-    order: Vec<String>,
+    samplenames: Vec<String>,
     pi_norm: HashMap<(AmpFactor, String), f64>,
     p_no_hop: f64,
     posterior_cache: HashMap<Vec<u32>, Vec<f64>>  
@@ -45,9 +45,13 @@ pub struct PhantomPosterior{
 
 impl PhantomPosterior{
 
+    /// Create a PhantomPosterior from a FingerPrint Histogram
+    /// 
+    /// Estimates the index hopping rate and other key quantities needed
+    /// for posterior assignment of bus records
     pub fn new(fph: &FingerprintHistogram) -> Self{
 
-        let order: Vec<String> = fph.order.to_vec();
+        let order: Vec<String> = fph.samplenames.to_vec();
         let n_samples = order.len() as f64;
 
         println!("Estimate SIHR");
@@ -117,7 +121,7 @@ impl PhantomPosterior{
 
         let posterior_cache = HashMap::new();
         PhantomPosterior{
-            order,
+            samplenames: order,
             pi_norm: pi_renorm,  // for each fingerprint a vector of posterior probs
             p_no_hop: p,
             posterior_cache
@@ -125,17 +129,19 @@ impl PhantomPosterior{
         }
     }
 
+    /// calculates the posterior probability of a fingerprint,
+    /// i.e. the origin of those reads
     fn posterior_internal(&self, fingerprint: &[u32]) -> Vec<f64>{
         // Page 22 in Suppl
-        let n_samples = self.order.len() as f64;
+        let n_samples = self.samplenames.len() as f64;
 
-        assert!(fingerprint.len()==self.order.len());
+        assert!(fingerprint.len()==self.samplenames.len());
 
         let r = AmpFactor(fingerprint.iter().sum());
 
-        let mut logposterior: Vec<f64> = Vec::with_capacity(self.order.len());
+        let mut logposterior: Vec<f64> = Vec::with_capacity(self.samplenames.len());
         let logbase = (n_samples-1.0).ln() - ((1.0/ self.p_no_hop) -1.0).ln();
-        for (sname, y) in izip![self.order.iter(), fingerprint.iter() ]{
+        for (sname, y) in izip![self.samplenames.iter(), fingerprint.iter() ]{
 
             let pi = *self.pi_norm.get(&(r, sname.to_string())).unwrap_or_else(|| panic!("Unknown {} {}", sname,r.0));
             let logpi = pi.ln();
@@ -149,10 +155,12 @@ impl PhantomPosterior{
         posterior_normed
     }
 
+    /// calculates the posterior assignment probability of a record with a given fingerprint across samples
+    /// (intuitively, the read would go to the sampel where it has the highest reads)
     pub fn posterior(&self, fingerprint: Fingerprint) -> HashMap<String, f64>{
 
-        let mut fp_numeric: Vec<u32> = Vec::with_capacity(self.order.len());
-        for s in &self.order{
+        let mut fp_numeric: Vec<u32> = Vec::with_capacity(self.samplenames.len());
+        for s in &self.samplenames{
             let y = fingerprint.get(s).unwrap_or(&0);
             fp_numeric.push(*y);
         }
@@ -160,7 +168,7 @@ impl PhantomPosterior{
 
         let mut posterior_map: HashMap<String, f64> = HashMap::new();
 
-        for (sname,post) in izip![self.order.iter(), posterior_numeric.iter()]{
+        for (sname,post) in izip![self.samplenames.iter(), posterior_numeric.iter()]{
             posterior_map.insert(sname.clone(), *post);
         }
         posterior_map
@@ -169,7 +177,6 @@ impl PhantomPosterior{
     #[allow(non_snake_case)]
     fn find_MAP_sample(&mut self, fp: &Vec<u32>, posterior_threshold: f64) -> Option<String>{
 
-
         if !self.posterior_cache.contains_key(fp){
             let pvec = self.posterior_internal(fp);
             self.posterior_cache.insert(fp.clone(), pvec);
@@ -177,7 +184,7 @@ impl PhantomPosterior{
         let posterior_vec = self.posterior_cache.get(fp).unwrap();
 
         let (ix, pmax) = argmax_float(posterior_vec);
-        let sample_max = self.order[ix].clone();
+        let sample_max = self.samplenames[ix].clone();
 
         // TODO: slight adaptation: 
         // if the fingerprint is only a single sample
@@ -188,7 +195,7 @@ impl PhantomPosterior{
 
         let n_samples = fp.iter().filter(|&x| *x>0).count();
         if n_samples == 1{
-            threshold = 0.9;
+            threshold = 0.95;
         }
 
         if pmax > threshold {
@@ -199,6 +206,14 @@ impl PhantomPosterior{
         }
     }
 
+    /// Filter a collection of Bus-quantifications, removing reads/busrecords
+    /// that hopped across samples during sequencing
+    /// # Parameters
+    /// * input_busfolders: HashMap of Samplename -> BusFolder; all the samples to filter
+    /// * output_busfolders: where to write the filtered busfiles
+    /// * output_removed: where to write the busrecords that got filtered per sample
+    /// * output_ambiguous: where to write the busrecords that were ambigous (cant be assigned to a single sample)
+    /// * posterior_threshold: Any record that whose posterior assignement probabilty to a single sample exeeds the thresold is written into the output. Otherwise it goes to ambiguois
     pub fn filter_busfiles(
         &mut self, input_busfolders: &HashMap<String, BusFolder>, 
         output_busfolders: &HashMap<String, String>,
@@ -307,7 +322,7 @@ impl PhantomPosterior{
                 let fp_hash = make_fingerprint_simple(&rd);
         
                 // turn the hashmap into a vector, sorted acc to order
-                let fp:  &Vec<_>  = &self.order.iter()
+                let fp:  &Vec<_>  = &self.samplenames.iter()
                     .map(|s| fp_hash.get(s).unwrap_or(&0)).cloned().collect();
 
                 // if we find an unambiguous assignment, write the molecule to that sample
@@ -325,7 +340,7 @@ impl PhantomPosterior{
                     *v += r.COUNT as usize;
                     
                     // write the filtered reads into the "remove" files
-                    for s in &self.order{
+                    for s in &self.samplenames{
                         if *s != sample_max{
                             // if that sample has the molecules, its a phantom
                             if let Some(r) = rd.get(s){
@@ -363,7 +378,7 @@ impl PhantomPosterior{
         // println!("{records_multi_finger}/{records_total} records were mutli");
 
 
-        for s in &self.order{
+        for s in &self.samplenames{
             let ro = records_original.get(s).unwrap_or(&0);
             let rr =records_written.get(s).unwrap_or(&0);
             let rf = records_filtered.get(s).unwrap_or(&0);
@@ -373,7 +388,7 @@ impl PhantomPosterior{
             );
         }
         println!("=============================");
-        for s in &self.order{
+        for s in &self.samplenames{
             let ro = reads_original.get(s).unwrap_or(&0);
             let rr =reads_written.get(s).unwrap_or(&0);
             let rf = reads_filtered.get(s).unwrap_or(&0);
@@ -405,10 +420,10 @@ impl PhantomPosterior{
 
 #[cfg(test)]
 mod testing{
-    use std::collections::{HashMap};
-    use rustbustools::{io::{BusRecord, BusFolder, setup_busfile}};
+    use super::*;
+    // use std::collections::HashMap;
+    use bustools::io::{BusRecord, BusFolder, setup_busfile};
     use crate::{posterior::PhantomPosterior, phantompurger::{create_dummy_ec, make_fingerprint_histogram}};
-
 
     // #[test]
     // fn test_posterior(){
@@ -489,11 +504,11 @@ mod testing{
             0.99
         );
         println!("============================");
-        rustbustools::inspect::inspect("/tmp/s1_filtered.bus");
-        println!("============================");
-        rustbustools::inspect::inspect("/tmp/s2_filtered.bus");
-        println!("============================");
-        rustbustools::inspect::inspect("/tmp/s3_filtered.bus");
+        // rustbustools_cli::inspect::inspect("/tmp/s1_filtered.bus");
+        // println!("============================");
+        // rustbustools_cli::inspect::inspect("/tmp/s2_filtered.bus");
+        // println!("============================");
+        // rustbustools_cli::inspect::inspect("/tmp/s3_filtered.bus");
 
 
     }
@@ -546,17 +561,17 @@ mod testing{
             0.99
         );
 
-        println!("=========Unfiltered===================");
-        rustbustools::inspect::inspect(&format!("{fname1}/output.corrected.sort.bus"));
-        println!("===========filtered=================");
-        rustbustools::inspect::inspect("/tmp/s1_filtered.bus");
+        // println!("=========Unfiltered===================");
+        // rustbustools_cli::inspect::inspect(&format!("{fname1}/output.corrected.sort.bus"));
+        // println!("===========filtered=================");
+        // rustbustools_cli::inspect::inspect("/tmp/s1_filtered.bus");
 
-        println!("#########################################");
+        // println!("#########################################");
 
-        println!("=========Unfiltered===================");
-        rustbustools::inspect::inspect(&format!("{fname2}/output.corrected.sort.bus"));
-        println!("===========filtered=================");
-        rustbustools::inspect::inspect("/tmp/s2_filtered.bus");
+        // println!("=========Unfiltered===================");
+        // rustbustools_cli::inspect::inspect(&format!("{fname2}/output.corrected.sort.bus"));
+        // println!("===========filtered=================");
+        // rustbustools_cli::inspect::inspect("/tmp/s2_filtered.bus");
 
         // let bar = get_progressbar((b1_records+b2_records) as u64);
         // let mut counter = 0;

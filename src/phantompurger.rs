@@ -1,16 +1,15 @@
-use crate::{binomialreg::phantom_binomial_regression, utils::valmap_ref};
-use flate2::{write::GzEncoder, Compression};
-use itertools::{izip, Itertools};
-use rustbustools::consistent_genes::Ec2GeneMapper;
 use crate::disjoint::DisjointSubsets;
-use rustbustools::io::{BusFolder, BusRecord};
-use rustbustools::utils::get_progressbar;
-use rustbustools::{
-    bus_multi::{CellIteratorMulti, CellUmiIteratorMulti},
+use crate::{binomialreg::phantom_binomial_regression, utils::valmap_ref};
+use bustools::consistent_genes::Ec2GeneMapper;
+use bustools::io::{BusFolder, BusRecord};
+use bustools::utils::get_progressbar;
+use bustools::{
+    bus_multi::{CellUmiIteratorMulti},
     consistent_genes::{GeneId, Genename, EC},
     io::BusReader,
-    iterators::{CbUmiGroupIterator, CellGroupIterator},
+    iterators::{CbUmiGroupIterator},
 };
+use itertools::{izip};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -19,133 +18,15 @@ use std::{
     time::Instant,
 };
 
-#[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug, Copy)]
-pub struct CB(u64);
-
-pub fn detect_cell_overlap(busfolders: &HashMap<String, String>, outfile: &str) {
-    // for each CB calcualte the number of UMIs per experiment/busfile
-    // if extensive swapping has occured, we'll see shared CBs across experiments
-    // with correlated #umis
-
-    if !outfile.ends_with(".csv") && !outfile.ends_with(".csv.gz") {
-        panic!("unknwon file extension. must be either .csv or .csv.gz")
-    }
-
-    // figure out size of iterators, just for progress bar!
-    let cbs_per_file = valmap_ref(
-        |busfile| {
-            println!("determine size of iterator {busfile}");
-            BusReader::new(busfile).groupby_cb().count()
-        },
-        busfolders,
-    );
-
-    println!("total records {:?}", cbs_per_file);
-    let total: usize = cbs_per_file.values().sum();
-
-    let samplenames: Vec<String> = busfolders.keys().cloned().collect();
-    let multi_iter = CellIteratorMulti::new(busfolders);
-    let mut result: HashMap<CB, Vec<usize>> = HashMap::new();
-
-    let bar = get_progressbar(total as u64);
-
-    for (i, (c, record_dict)) in multi_iter.enumerate() {
-        let mut entry: Vec<usize> = Vec::new();
-        for s in samplenames.iter() {
-            let numi = match record_dict.get(s) {
-                Some(records) => records.iter().map(|r| r.UMI).unique().count(),
-                None => 0,
-            };
-            entry.push(numi)
-        }
-        result.insert(CB(c), entry);
-
-        if i % 10_000 == 0 {
-            // cells iterations are usually rather small, i.e. millions, update more reg
-            bar.inc(10_000);
-        }
-    }
-
-    if outfile.ends_with(".csv") {
-        // write to file
-        // TODO could be inlined into the above code to instantly write
-        let mut fh = File::create(outfile).unwrap();
-        let mut header = samplenames.join(",");
-        header.push_str(",CB");
-        writeln!(fh, "{}", header).unwrap();
-
-        for (cid, numis) in result.iter() {
-            // concat with commas
-            let mut s = numis
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<String>>()
-                .join(",");
-            s.push_str(&format!(",{}", cid.0));
-            writeln!(fh, "{}", s).unwrap();
-        }
-    } else if outfile.ends_with(".csv.gz") {
-        // write compressed
-        let fh = File::create(&format!("{outfile}.gz")).unwrap();
-        let mut e = GzEncoder::new(fh, Compression::default());
-        let mut header = samplenames.join(",");
-        header.push_str(",CB\n");
-        e.write_all(header.as_bytes()).unwrap();
-        for (cid, numis) in result.iter() {
-            // concat with commas
-            let mut s = numis
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<String>>()
-                .join(",");
-            s.push_str(&format!(",{}\n", cid.0));
-            e.write_all(s.as_bytes()).unwrap();
-        }
-    } else {
-        panic!("unknwon file extension. must be either .csv or .csv.gz")
-    }
-}
-
-pub fn detect_overlap(busfolders: HashMap<String, String>) -> HashMap<Vec<String>, usize> {
-    // deprecated
-    // mesures the number of ovelapping CUGs across the experiments
-
-    let mut total = 0;
-    // TODO: this doesnt check if the EC overlaps
-    for v in busfolders.values() {
-        println!("determine size of iterator");
-        let total_records = BusReader::new(v).groupby_cbumi().count();
-        if total < total_records {
-            total = total_records
-        }
-    }
-    println!("total records {}", total);
-
-    let multi_iter = CellUmiIteratorMulti::new(&busfolders);
-    let bar = get_progressbar(total as u64);
-    let mut counter: HashMap<Vec<String>, usize> = HashMap::new();
-
-    for (i, ((_cb, _umi), record_dict)) in multi_iter.enumerate() {
-        let mut the_set: Vec<String> = record_dict.keys().cloned().collect();
-        the_set.sort();
-        let val = counter.entry(the_set).or_insert(0);
-        *val += 1;
-
-        if i % 1000000 == 0 {
-            bar.inc(1000000);
-        }
-    }
-    counter
-}
-
 /// given a collection of busfiles, FingerPrintHistogram keeps track of the
 /// number of times we see a molecule (CB/UMI/gene) in a particular distribution
 /// across the busfiles. Instead recording individual CUGs, we aggregate all the ones
-/// having the same fingerprint, i.e. we create a histogram of fingerprints
-///
+/// having the same fingerprint across samples, i.e. we create a histogram of fingerprints
 #[derive(Debug)]
 pub struct FingerprintHistogram {
-    pub(crate) order: Vec<String>,
+    // Names of the samples across which we calcualte the fingerprints
+    pub(crate) samplenames: Vec<String>,
+    // Histogram FingerPrint -> Frequency
     pub(crate) histogram: HashMap<Vec<u32>, usize>,
 }
 
@@ -153,6 +34,8 @@ pub struct FingerprintHistogram {
 pub struct AmpFactor(u32);
 
 impl FingerprintHistogram {
+
+    /// load histogram from disk
     pub fn from_csv(filename: &str) -> Self {
         let fh = File::open(filename).unwrap();
         let mut samplenames: Vec<String> = Vec::new();
@@ -174,7 +57,7 @@ impl FingerprintHistogram {
             }
         }
         FingerprintHistogram {
-            order: samplenames,
+            samplenames,
             histogram,
         }
     }
@@ -182,12 +65,17 @@ impl FingerprintHistogram {
     pub fn new(sample_order: &[String]) -> Self {
         let hist = HashMap::new();
         FingerprintHistogram {
-            order: sample_order.to_owned(), // not sure why, linter is suggesting it
+            samplenames: sample_order.to_owned(), // not sure why, linter is suggesting it
             histogram: hist,
         }
     }
 
-    pub fn add(&mut self, record_dict: HashMap<String, Vec<BusRecord>>, ecmapper_dict:&HashMap<String, &Ec2GeneMapper>) {
+    /// adds a CUG (observed over several busfiles) into the histogram
+    pub fn add(
+        &mut self,
+        record_dict: HashMap<String, Vec<BusRecord>>,
+        ecmapper_dict: &HashMap<String, &Ec2GeneMapper>,
+    ) {
         // creates a fingerprint of the record_dict, updates the counts in the histogram
 
         let grouped_record_dicts = groupby_gene_across_samples(&record_dict, ecmapper_dict);
@@ -196,7 +84,7 @@ impl FingerprintHistogram {
             let fp_hash = make_fingerprint_simple(&rd);
             // turn the hashmap into a vector, sorted acc to order
             let fp: Vec<_> = self
-                .order
+                .samplenames
                 .iter()
                 .map(|s| fp_hash.get(s).unwrap_or(&0))
                 .cloned()
@@ -211,9 +99,10 @@ impl FingerprintHistogram {
         }
     }
 
+    /// save the histogram to disk
     pub fn to_csv(&self, outfile: &str) {
         let mut fh = File::create(outfile).expect("Cant create file: {outfile}");
-        let mut header = self.order.join(",");
+        let mut header = self.samplenames.join(",");
         header.push_str(",frequency");
         writeln!(fh, "{}", header).unwrap();
 
@@ -229,6 +118,7 @@ impl FingerprintHistogram {
         }
     }
 
+    /// Estimate SIHR from the histogram
     pub fn estimate_sihr(&self) -> f64 {
         // number of non-chimeric molecules of amp r
         let mut z_r: HashMap<usize, usize> = HashMap::new();
@@ -256,7 +146,7 @@ impl FingerprintHistogram {
         let m: Vec<usize> = r.iter().map(|x| *m_r.get(x).unwrap()).collect();
 
         let (pmax, _prange, _loglike_range) =
-            phantom_binomial_regression(&z, &m, &r, self.order.len());
+            phantom_binomial_regression(&z, &m, &r, self.samplenames.len());
 
         let mut fh = File::create("/tmp/phat.csv").unwrap();
         writeln!(fh, "p,logp").unwrap();
@@ -319,7 +209,7 @@ pub fn groupby_gene_across_samples(
             // pop out the element. not needed, but shrinks the map
             let (record, samplename, _genes) = big_hash.remove(&el_id).unwrap();
 
-            let rlist = sample_grouped.entry(samplename).or_insert(Vec::new());
+            let rlist = sample_grouped.entry(samplename).or_default();
             rlist.push(record.clone());
         }
 
@@ -341,38 +231,40 @@ pub fn groupby_gene_across_samples(
     emit_vector
 }
 
-pub fn map_to_file(h: &HashMap<(AmpFactor, String), f64>, outfile: &str) {
-    let mut amp: Vec<AmpFactor> = h.keys().map(|(r, _s)| *r).unique().collect();
-    let mut samplenames: Vec<String> = h.keys().map(|(_r, s)| s.to_owned()).unique().collect();
 
-    amp.sort();
-    samplenames.sort();
 
-    let mut fh = File::create(outfile).unwrap();
-    let mut header = "samplename,".to_string();
-    let rstring = amp
-        .iter()
-        .map(|x| x.0.to_string())
-        .collect::<Vec<String>>()
-        .join(",");
-    header.push_str(&rstring);
-    header.push_str(",frequency");
+// fn map_to_file(h: &HashMap<(AmpFactor, String), f64>, outfile: &str) {
+//     let mut amp: Vec<AmpFactor> = h.keys().map(|(r, _s)| *r).unique().collect();
+//     let mut samplenames: Vec<String> = h.keys().map(|(_r, s)| s.to_owned()).unique().collect();
 
-    writeln!(fh, "{}", header).unwrap();
+//     amp.sort();
+//     samplenames.sort();
 
-    for s in samplenames {
-        let pi_vec: Vec<String> = amp
-            .iter()
-            .map(|r| h.get(&(*r, s.clone())).unwrap().to_string())
-            .collect();
-        writeln!(fh, "{},{}", s, pi_vec.join(",")).unwrap();
-    }
-}
+//     let mut fh = File::create(outfile).unwrap();
+//     let mut header = "samplename,".to_string();
+//     let rstring = amp
+//         .iter()
+//         .map(|x| x.0.to_string())
+//         .collect::<Vec<String>>()
+//         .join(",");
+//     header.push_str(&rstring);
+//     header.push_str(",frequency");
 
+//     writeln!(fh, "{}", header).unwrap();
+
+//     for s in samplenames {
+//         let pi_vec: Vec<String> = amp
+//             .iter()
+//             .map(|r| h.get(&(*r, s.clone())).unwrap().to_string())
+//             .collect();
+//         writeln!(fh, "{},{}", s, pi_vec.join(",")).unwrap();
+//     }
+// }
+
+/// main function here: takes a dict of busfolders, creates fingerprints for each molecule
+/// returns the fingerprints histogram (how often each fingerprint was observed)
+/// and the ordering of the fingerprint (i.e. which element corresponds to which experiment)
 pub fn make_fingerprint_histogram(busfolders: HashMap<String, BusFolder>) -> FingerprintHistogram {
-    // main function here: takes a dict of busfolders, creates fingerprints for each molecule
-    // returns the fingerprints histogram (how often each fingerprint was observed)
-    // and the ordering of the fingerprint (i.e. which element corresponds to which experiment)
 
     // create the EC2gene mappers
     let ecmapper_dict = busfolders
@@ -395,11 +287,10 @@ pub fn make_fingerprint_histogram(busfolders: HashMap<String, BusFolder>) -> Fin
         "Ran _make_fingerprint_histogram, took {} seconds.",
         elapsed_time.as_secs()
     );
-
     result
 }
 
-pub fn _make_fingerprint_histogram(
+fn _make_fingerprint_histogram(
     busnames: &HashMap<String, String>,
     ecmapper_dict: &HashMap<String, &Ec2GeneMapper>,
 ) -> FingerprintHistogram {
@@ -419,10 +310,6 @@ pub fn _make_fingerprint_histogram(
     // the actual workhorse, make_fingerprint_histogram is just a convenient wrapper
     let multi_iter = CellUmiIteratorMulti::new(busnames);
 
-    // let bar = ProgressBar::new_spinner();
-    // bar.set_style(ProgressStyle::default_bar()
-    //     .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos} {per_sec}")
-    //     .progress_chars("##-"));
     let bar = get_progressbar(total as u64);
 
     let mut order: Vec<_> = busnames.keys().cloned().collect();
@@ -471,7 +358,7 @@ pub fn create_dummy_ec() -> Ec2GeneMapper {
 #[cfg(test)]
 pub mod tests {
     use crate::phantompurger::create_dummy_ec;
-    use rustbustools::{
+    use bustools::{
         consistent_genes::Ec2GeneMapper,
         io::{setup_busfile, BusFolder, BusRecord},
     };
@@ -482,16 +369,16 @@ pub mod tests {
         _make_fingerprint_histogram, groupby_gene_across_samples, make_fingerprint_simple,
         FingerprintHistogram,
     };
-    use super::{detect_cell_overlap, make_fingerprint_histogram};
+    use super::make_fingerprint_histogram;
 
     #[test]
     fn test_groupby_gene_across_samples() {
         let es1 = create_dummy_ec();
         let es2 = create_dummy_ec();
-        let es_dict: HashMap<String, &Ec2GeneMapper> = vec![
-            ("s1".to_string(), &es1),
-            ("s2".to_string(), &es2),
-        ].into_iter().collect();
+        let es_dict: HashMap<String, &Ec2GeneMapper> =
+            vec![("s1".to_string(), &es1), ("s2".to_string(), &es2)]
+                .into_iter()
+                .collect();
 
         // first sample: two records, with consistent gene A
         let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0};
@@ -504,7 +391,9 @@ pub mod tests {
         let record_dict = vec![
             ("s1".to_string(), vec![r1, r2]),
             ("s2".to_string(), vec![s1, s2]),
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
 
         let res = groupby_gene_across_samples(&record_dict, &es_dict);
 
@@ -531,14 +420,16 @@ pub mod tests {
         let record_dict = vec![
             ("s1".to_string(), vec![r1, r2]),
             ("s2".to_string(), vec![s1, s2]),
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
         let res = groupby_gene_across_samples(&record_dict, &es_dict);
         println!("{:?}", res);
     }
 
     #[test]
     fn test_make_fingerprint_histogram() {
-        use rustbustools::io::setup_busfile;
+        use bustools::io::setup_busfile;
 
         // a pair, same EC
         let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0};
@@ -602,10 +493,9 @@ pub mod tests {
         let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0};
         let s1 = BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 3, FLAG: 0};
 
-        let record_dict = vec![
-            ("s1".to_string(), r1),
-            ("s2".to_string(), s1),
-        ].into_iter().collect();
+        let record_dict = vec![("s1".to_string(), r1), ("s2".to_string(), s1)]
+            .into_iter()
+            .collect();
         let res = make_fingerprint_simple(&record_dict);
         println!("{:?}", res);
 
@@ -626,10 +516,7 @@ pub mod tests {
         //     ("full".to_string(), "/home/michi/bus_testing/bus_output/output.corrected.sort.bus".to_string()),
         //     ("short".to_string(), "/home/michi/bus_testing/bus_output_short/output.corrected.sort.bus".to_string())
         // ]);
-        let hashmap = HashMap::from([
-            ("full".to_string(), b1),
-            ("short".to_string(), b2)
-        ]);
+        let hashmap = HashMap::from([("full".to_string(), b1), ("short".to_string(), b2)]);
 
         let s = make_fingerprint_histogram(hashmap);
 
@@ -637,39 +524,7 @@ pub mod tests {
         println!("{:?}", s)
     }
 
-    #[test]
-    fn test_detect_overlap() {
-        let r1 =BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 2, FLAG: 0};
-        let r2 = BusRecord{CB: 0, UMI: 1, EC: 0, COUNT: 3, FLAG: 0};
-        let (fname1, _d1) = setup_busfile(&vec![r1]);
-        let (fname2, _d2) = setup_busfile(&vec![r2]);
-        let busfolders = HashMap::from([
-            ("s1".to_string(), fname1.clone()),
-            ("s2".to_string(), fname2.clone()),
-        ]);
-        println!("{}", fname1);
-        detect_cell_overlap(&busfolders, "/tmp/overlap.csv");
-        detect_cell_overlap(&busfolders, "/tmp/overlap.csv.gz");
-    }
 
-    // #[test]
-    pub fn test_detect_cell_overlap() {
-        // let t2g = "/home/michi/bus_testing/transcripts_to_genes.txt";
-        // let b1 = BusFolder::new("/home/michi/bus_testing/bus_output/", t2g);
-        // let b1 = BusFolder::new("/home/michi/bus_testing/bus_output_short/", t2g);
-        // let b2 = BusFolder::new("/home/michi/bus_testing/bus_output_short/", t2g);
-        // let busfolders = HashMap::from([
-        //     ("full".to_string(), b1),
-        //     ("short".to_string(), b2)
-        // ]);
-
-        let busfolders = HashMap::from([
-            ("full".to_string(), "/home/michi/bus_testing/bus_output/output.corrected.sort.bus".to_string()),
-            ("short".to_string(), "/home/michi/bus_testing/bus_output_short/output.corrected.sort.bus".to_string())
-        ]);
-
-        detect_cell_overlap(&busfolders, "/tmp/test_detect_cell_overlap.csv")
-    }
 
     #[test]
     pub fn test_csv_read_write() {
@@ -683,7 +538,10 @@ pub mod tests {
         histogram.insert(vec![0, 1], 1);
         histogram.insert(vec![1, 1], 1);
 
-        let fph = FingerprintHistogram { order, histogram };
+        let fph = FingerprintHistogram {
+            samplenames: order,
+            histogram,
+        };
 
         fph.to_csv("/tmp/finger.csv");
 
@@ -709,7 +567,10 @@ pub mod tests {
         histogram.insert(vec![0, 1], 1);
         histogram.insert(vec![1, 1], 1);
 
-        let fph = FingerprintHistogram { order, histogram };
+        let fph = FingerprintHistogram {
+            samplenames: order,
+            histogram,
+        };
 
         let p = fph.estimate_sihr();
         println!("{}", p);

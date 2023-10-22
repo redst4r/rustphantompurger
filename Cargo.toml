@@ -9,6 +9,6 @@ edition = "2021"
 indicatif = "0.17"
 clap = { version = "4", features = ["derive"] }
 statrs = "0.16"
-itertools="0.10.5"
-rustbustools = { path = "/home/michi/Dropbox/rustbustools" }
-flate2 = "1.0"
+itertools="0.11"
+bustools = { path = "/home/michi/Dropbox/rustbustools", version="0.9"  }
+flate2 = "1"

@@ -87,9 +87,13 @@ impl<T: Hash + Eq> DisjointSubsets<T> {
     }
 }
 
+fn vec2set<T: Eq + Hash>(x: Vec<T>) -> HashSet<T> {
+    x.into_iter().collect::<HashSet<T>>()
+}
+
 #[cfg(test)]
 mod test {
-    use rustbustools::utils::vec2set;
+    use super::vec2set;
 
     use crate::disjoint::DisjointSubsets;
     use std::collections::{HashMap, HashSet};
