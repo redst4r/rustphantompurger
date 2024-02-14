@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fs::File};
 use flate2::{write::GzEncoder, Compression};
 use itertools::Itertools;
-use bustools::{io::BusReader, bus_multi::{CellIteratorMulti, CellUmiIteratorMulti}, utils::get_progressbar, iterators::{CbUmiGroupIterator, CellGroupIterator}};
+use bustools::{io::BusReader, iterators::CellGroupIterator, merger::MultiIterator, utils::get_progressbar};
 use std::{
     hash::Hash,
     io::Write,
@@ -29,11 +29,18 @@ pub fn detect_cell_overlap(busfolders: &HashMap<String, String>, outfile: &str) 
         busfolders,
     );
 
+    let cb_iterators = valmap_ref(
+        |busfile| {
+            BusReader::new(busfile).groupby_cb()
+        },
+        busfolders,
+    );
+
     println!("total records {:?}", cbs_per_file);
     let total: usize = cbs_per_file.values().sum();
 
     let samplenames: Vec<String> = busfolders.keys().cloned().collect();
-    let multi_iter = CellIteratorMulti::new(busfolders);
+    let multi_iter = MultiIterator::new(cb_iterators);
     let mut result: HashMap<CB, Vec<usize>> = HashMap::new();
 
     let bar = get_progressbar(total as u64);
@@ -49,9 +56,9 @@ pub fn detect_cell_overlap(busfolders: &HashMap<String, String>, outfile: &str) 
         }
         result.insert(CB(c), entry);
 
-        if i % 10_000 == 0 {
+        if i % 100_000 == 0 {
             // cells iterations are usually rather small, i.e. millions, update more reg
-            bar.inc(10_000);
+            bar.inc(100_000);
         }
     }
 
@@ -93,39 +100,6 @@ pub fn detect_cell_overlap(busfolders: &HashMap<String, String>, outfile: &str) 
     } else {
         panic!("unknwon file extension. must be either .csv or .csv.gz")
     }
-}
-
-
-pub fn detect_overlap(busfolders: HashMap<String, String>) -> HashMap<Vec<String>, usize> {
-    // deprecated
-    // mesures the number of ovelapping CUGs across the experiments
-
-    let mut total = 0;
-    // TODO: this doesnt check if the EC overlaps
-    for v in busfolders.values() {
-        println!("determine size of iterator");
-        let total_records = BusReader::new(v).groupby_cbumi().count();
-        if total < total_records {
-            total = total_records
-        }
-    }
-    println!("total records {}", total);
-
-    let multi_iter = CellUmiIteratorMulti::new(&busfolders);
-    let bar = get_progressbar(total as u64);
-    let mut counter: HashMap<Vec<String>, usize> = HashMap::new();
-
-    for (i, ((_cb, _umi), record_dict)) in multi_iter.enumerate() {
-        let mut the_set: Vec<String> = record_dict.keys().cloned().collect();
-        the_set.sort();
-        let val = counter.entry(the_set).or_insert(0);
-        *val += 1;
-
-        if i % 1000000 == 0 {
-            bar.inc(1000000);
-        }
-    }
-    counter
 }
 
 

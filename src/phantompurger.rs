@@ -1,15 +1,13 @@
 use crate::disjoint::DisjointSubsets;
-use crate::{binomialreg::phantom_binomial_regression, utils::valmap_ref};
+use crate::utils::{ec_mapper_dict_from_busfolders, get_spinner};
+use crate::binomialreg::phantom_binomial_regression;
 use bustools::consistent_genes::Ec2GeneMapper;
 use bustools::io::{BusFolder, BusRecord};
-use bustools::utils::get_progressbar;
+use bustools::merger::MultiIterator;
 use bustools::{
-    bus_multi::{CellUmiIteratorMulti},
     consistent_genes::{GeneId, Genename, EC},
-    io::BusReader,
-    iterators::{CbUmiGroupIterator},
+    iterators::CbUmiGroupIterator,
 };
-use itertools::{izip};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -35,6 +33,14 @@ pub struct AmpFactor(u32);
 
 impl FingerprintHistogram {
 
+    pub fn get_samplenames(&self) -> Vec<String> {
+        self.samplenames.clone()
+    }
+
+    pub fn get_histogram(&self) -> HashMap<Vec<u32>, usize> {
+        self.histogram.clone()
+    }
+        
     /// load histogram from disk
     pub fn from_csv(filename: &str) -> Self {
         let fh = File::open(filename).unwrap();
@@ -118,9 +124,9 @@ impl FingerprintHistogram {
         }
     }
 
-    /// Estimate SIHR from the histogram
-    pub fn estimate_sihr(&self) -> f64 {
-        // number of non-chimeric molecules of amp r
+
+    /// get the number of non-chimeric molecules as a function of r
+    fn get_z_r(&self) -> HashMap<usize, usize>{
         let mut z_r: HashMap<usize, usize> = HashMap::new();
 
         for (fingerprint, freq) in self.histogram.iter() {
@@ -130,7 +136,12 @@ impl FingerprintHistogram {
                 let v = z_r.entry(r).or_insert(0);
                 *v += freq;
             }
-        }
+        }      
+        z_r  
+    }
+
+    /// get the number of total molecules as a function of r
+    fn get_m_r(&self) -> HashMap<usize, usize>{
 
         let mut m_r: HashMap<usize, usize> = HashMap::new();
         for (fingerprint, freq) in self.histogram.iter() {
@@ -138,6 +149,18 @@ impl FingerprintHistogram {
             let v = m_r.entry(r).or_insert(0);
             *v += freq;
         }
+        m_r
+    }
+    
+    /// Estimate SIHR from the histogram via binomial regression
+    /// TODO: the paper suggests to filter some values:
+    /// - remove samples (rows over r) with less than 10 observations (m_r <10)
+    /// - remove samples with r>25
+    pub fn estimate_sihr(&self) -> f64 {
+        // number of non-chimeric molecules of amp r
+
+        let z_r = self.get_z_r();
+        let m_r = self.get_m_r();
 
         let mut r: Vec<usize> = m_r.keys().map(|k| k.to_owned()).collect();
         r.sort();
@@ -148,11 +171,11 @@ impl FingerprintHistogram {
         let (pmax, _prange, _loglike_range) =
             phantom_binomial_regression(&z, &m, &r, self.samplenames.len());
 
-        let mut fh = File::create("/tmp/phat.csv").unwrap();
-        writeln!(fh, "p,logp").unwrap();
-        for (p, logp) in izip!(_prange, _loglike_range) {
-            writeln!(fh, "{},{}", p, logp).unwrap();
-        }
+        // let mut fh = File::create("/tmp/phat.csv").unwrap();
+        // writeln!(fh, "p,logp").unwrap();
+        // for (p, logp) in izip!(_prange, _loglike_range) {
+        //     writeln!(fh, "{},{}", p, logp).unwrap();
+        // }
         pmax
     }
 }
@@ -233,55 +256,21 @@ pub fn groupby_gene_across_samples(
 
 
 
-// fn map_to_file(h: &HashMap<(AmpFactor, String), f64>, outfile: &str) {
-//     let mut amp: Vec<AmpFactor> = h.keys().map(|(r, _s)| *r).unique().collect();
-//     let mut samplenames: Vec<String> = h.keys().map(|(_r, s)| s.to_owned()).unique().collect();
-
-//     amp.sort();
-//     samplenames.sort();
-
-//     let mut fh = File::create(outfile).unwrap();
-//     let mut header = "samplename,".to_string();
-//     let rstring = amp
-//         .iter()
-//         .map(|x| x.0.to_string())
-//         .collect::<Vec<String>>()
-//         .join(",");
-//     header.push_str(&rstring);
-//     header.push_str(",frequency");
-
-//     writeln!(fh, "{}", header).unwrap();
-
-//     for s in samplenames {
-//         let pi_vec: Vec<String> = amp
-//             .iter()
-//             .map(|r| h.get(&(*r, s.clone())).unwrap().to_string())
-//             .collect();
-//         writeln!(fh, "{},{}", s, pi_vec.join(",")).unwrap();
-//     }
-// }
-
 /// main function here: takes a dict of busfolders, creates fingerprints for each molecule
 /// returns the fingerprints histogram (how often each fingerprint was observed)
 /// and the ordering of the fingerprint (i.e. which element corresponds to which experiment)
-pub fn make_fingerprint_histogram(busfolders: HashMap<String, BusFolder>) -> FingerprintHistogram {
+pub fn make_fingerprint_histogram(busfolders: HashMap<String, BusFolder>, t2g_file: &str) -> FingerprintHistogram {
 
     // create the EC2gene mappers
-    let ecmapper_dict = busfolders
-        .iter()
-        .map(
-            |(samplename, bfolder)| (samplename.clone(), &bfolder.ec2gene), //#todo remove clone
-        )
-        .collect();
+    // silly, cant create one where ECMapper is a reference
+    // need to instantiate/own it, then create ref
 
-    // a list of busfile-names for the iterator
-    let busnames = busfolders
-        .iter()
-        .map(|(s, bfolder)| (s.clone(), bfolder.get_busfile()))
-        .collect();
+    println!("Making EC mappers");
+    let ec_tmp = ec_mapper_dict_from_busfolders(&busfolders, t2g_file );
+    let ecmapper_dict: HashMap<String, &Ec2GeneMapper> = ec_tmp.iter().map(|(name, d)| (name.clone(), d )).collect();
 
     let now = Instant::now();
-    let result = _make_fingerprint_histogram(&busnames, &ecmapper_dict);
+    let result = _make_fingerprint_histogram(&busfolders, &ecmapper_dict);
     let elapsed_time = now.elapsed();
     println!(
         "Ran _make_fingerprint_histogram, took {} seconds.",
@@ -291,28 +280,18 @@ pub fn make_fingerprint_histogram(busfolders: HashMap<String, BusFolder>) -> Fin
 }
 
 fn _make_fingerprint_histogram(
-    busnames: &HashMap<String, String>,
+    busfolders: &HashMap<String, BusFolder>,
     ecmapper_dict: &HashMap<String, &Ec2GeneMapper>,
 ) -> FingerprintHistogram {
-    // figure out size of iterators, just for progress bar!
-
-    let cbumi_per_file = valmap_ref(
-        |busfile| {
-            println!("determine size of iterator {busfile}");
-            BusReader::new(busfile).groupby_cbumi().count()
-        },
-        busnames,
-    );
-
-    let total: usize = cbumi_per_file.values().sum(); // worst case scenario where there's no overlap entirely!
-    println!("total records {:?}", cbumi_per_file);
 
     // the actual workhorse, make_fingerprint_histogram is just a convenient wrapper
-    let multi_iter = CellUmiIteratorMulti::new(busnames);
+    let iterators = busfolders.iter().map(|(k,v)| (k.clone(), v.get_iterator().groupby_cbumi())).collect();
+    let multi_iter = MultiIterator::new(iterators);
 
-    let bar = get_progressbar(total as u64);
-
-    let mut order: Vec<_> = busnames.keys().cloned().collect();
+    // let bar = get_progressbar(total as u64);
+    let bar = get_spinner();
+    
+    let mut order: Vec<_> = busfolders.keys().cloned().collect();
     order.sort();
 
     let mut fp_histo = FingerprintHistogram::new(&order);
@@ -360,7 +339,7 @@ pub mod tests {
     use crate::phantompurger::create_dummy_ec;
     use bustools::{
         consistent_genes::Ec2GeneMapper,
-        io::{setup_busfile, BusFolder, BusRecord},
+        io::{BusFolder, BusRecord},
     };
     use statrs::assert_almost_eq;
     use std::collections::HashMap;
@@ -459,8 +438,8 @@ pub mod tests {
         let (busname2, _dir2) = setup_busfile(&v2);
 
         let hashmap = HashMap::from([
-            ("s1".to_string(), busname1.to_string()),
-            ("s2".to_string(), busname2.to_string()),
+            ("s1".to_string(), BusFolder::new(&busname1)),
+            ("s2".to_string(), BusFolder::new(&busname2)),
         ]);
 
         let es1 = create_dummy_ec();
@@ -509,8 +488,8 @@ pub mod tests {
     pub fn testing2() {
         let t2g = "/home/michi/bus_testing/transcripts_to_genes.txt";
         // let b1 = BusFolder::new("/home/michi/bus_testing/bus_output/", t2g);
-        let b1 = BusFolder::new("/home/michi/bus_testing/bus_output_short/", t2g);
-        let b2 = BusFolder::new("/home/michi/bus_testing/bus_output_short/", t2g);
+        let b1 = BusFolder::new("/home/michi/bus_testing/bus_output_short/");
+        let b2 = BusFolder::new("/home/michi/bus_testing/bus_output_short/");
 
         // let hashmap = HashMap::from([
         //     ("full".to_string(), "/home/michi/bus_testing/bus_output/output.corrected.sort.bus".to_string()),
@@ -518,7 +497,7 @@ pub mod tests {
         // ]);
         let hashmap = HashMap::from([("full".to_string(), b1), ("short".to_string(), b2)]);
 
-        let s = make_fingerprint_histogram(hashmap);
+        let s = make_fingerprint_histogram(hashmap, t2g);
 
         s.to_csv("/tmp/testing2.csv");
         println!("{:?}", s)
@@ -577,4 +556,49 @@ pub mod tests {
 
         assert_almost_eq!(p, 0.5, 0.001);
     }
+
+    #[test]
+    fn test_sihr_real(){
+        let fph = FingerprintHistogram::from_csv("/home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv");
+        let sihr = fph.estimate_sihr();
+        // check that the SIHR is still the same
+        insta::assert_yaml_snapshot!(sihr, @r###"
+        ---
+        0.0016278754068794856
+        "###);
+    }
+
+    #[test]
+    fn test_zr_real(){
+        let fph = FingerprintHistogram::from_csv("/home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv");
+        // nubmer of non-chimeric reads
+        let z_r = fph.get_z_r();
+        
+        // need to enforce hashmap sorting! otherwise the resulting Hashmap (Even if same)
+        // will differ from the snapshot on disk
+        let mut settings = insta::Settings::clone_current();
+        settings.set_sort_maps(true);
+        settings.bind(|| {
+            // runs the assertion with the changed settings enabled
+            insta::assert_yaml_snapshot!(z_r);
+        });
+    }
+
+    #[test]
+    fn test_mr_real(){
+        let fph = FingerprintHistogram::from_csv("/home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv");
+        // nubmer of total reads
+        let m_r = fph.get_m_r();
+        
+        // need to enforce hashmap sorting! otherwise the resulting Hashmap (Even if same)
+        // will differ from the snapshot on disk
+        let mut settings = insta::Settings::clone_current();
+        settings.set_sort_maps(true);
+        settings.bind(|| {
+            // runs the assertion with the changed settings enabled
+            insta::assert_yaml_snapshot!(m_r);
+        });
+    }
+
+
 }

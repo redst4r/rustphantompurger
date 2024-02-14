@@ -1,5 +1,19 @@
 use std::collections::HashMap;
 
+use bustools::{consistent_genes::Ec2GeneMapper, io::BusFolder};
+
+pub fn ec_mapper_dict_from_busfolders(busfolders: &HashMap<String, BusFolder>, t2g_file: &str) ->  HashMap<String, Ec2GeneMapper> {
+
+        // create the EC2gene mappers
+        let mut ecmapper_dict_tmp = HashMap::new();
+        for (samplename, bfolder) in busfolders.iter(){
+            let ecmapper = bfolder.make_mapper(t2g_file);
+            ecmapper_dict_tmp.insert(samplename.clone(), ecmapper);
+        }
+        ecmapper_dict_tmp
+}
+
+
 pub fn logsumexp(x: &[f64]) -> f64 {
     // logsumexp trick
 
@@ -102,6 +116,19 @@ pub fn logspace(logmin: f64, logmax: f64, n: usize) -> Vec<f64> {
     let logx = linspace(logmin, logmax, n);
     logx.into_iter().map(|y| 10_f64.powf(y)).collect()
 }
+
+
+pub (crate) fn get_spinner() -> indicatif::ProgressBar{
+    let bar = indicatif::ProgressBar::new_spinner();
+    bar.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {pos} {per_sec}")
+            .unwrap()
+            .progress_chars("##-"),
+    );
+    bar
+}
+
 
 #[cfg(test)]
 mod tests {

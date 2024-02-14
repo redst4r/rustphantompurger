@@ -87,9 +87,9 @@ fn main() {
             let named_infolders= parse_key_value_args(&args.busfolders);
             println!("Infiles: {:?}",named_infolders);
 
-            let busfolder_dict = valmap(|folder|BusFolder::new(&folder, &args.t2g), named_infolders);
+            let busfolder_dict = valmap(|folder|BusFolder::new(&folder), named_infolders);
 
-            let histo = phantompurger::make_fingerprint_histogram(busfolder_dict);
+            let histo = phantompurger::make_fingerprint_histogram(busfolder_dict, &args.t2g);
             histo.to_csv(&cli.output);
         }
         MyCommand::phantomCB(args) => {
@@ -122,7 +122,7 @@ fn main() {
             let mut posterior = posterior::PhantomPosterior::new(&fph);
 
             println!("Building busfolder dicts");
-            let inputfolder_dict = valmap(|folder|BusFolder::new(&folder, &args.t2g), named_infolders);
+            let inputfolder_dict = valmap(|folder|BusFolder::new(&folder), named_infolders);
 
             println!("Filtering");
             posterior.filter_busfiles(
@@ -130,7 +130,8 @@ fn main() {
                 &named_outfiles, 
                 &named_removed,
                 &named_ambiguous,
-                args.threshold
+                args.threshold,
+                &args.t2g
             );
         }        
     }

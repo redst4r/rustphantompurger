@@ -1,12 +1,12 @@
-use std::{collections::HashMap, hash::Hash};
-use crate::{utils::{logsumexp, valmap_ref}, phantompurger::{FingerprintHistogram, Fingerprint, groupby_gene_across_samples, make_fingerprint_simple}};
-use itertools::izip;
-use bustools::{bus_multi::CellUmiIteratorMulti, io::BusReader, iterators::CbUmiGroupIterator};
+use std::{collections::HashMap, fs::File, hash::Hash};
+use crate::{phantompurger::{groupby_gene_across_samples, make_fingerprint_simple, Fingerprint, FingerprintHistogram}, utils::{ec_mapper_dict_from_busfolders, get_spinner, logsumexp, valmap_ref}};
+use itertools::{izip, Itertools};
+use bustools::{consistent_genes::Ec2GeneMapper, io::BusReader, iterators::CbUmiGroupIterator, merger::MultiIterator};
 use bustools::io::{BusFolder, BusWriter};
-use bustools::utils::{get_progressbar, argsort::argmax_float};
+use bustools::utils::argsort::argmax_float;
+use serde;
 
-
-#[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug, Copy)]
+#[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug, Copy, serde::Serialize)]
 pub struct AmpFactor(u32);
 
 pub struct PhantomPosterior{
@@ -133,13 +133,15 @@ impl PhantomPosterior{
     /// i.e. the origin of those reads
     fn posterior_internal(&self, fingerprint: &[u32]) -> Vec<f64>{
         // Page 22 in Suppl
-        let n_samples = self.samplenames.len() as f64;
+        let n_samples = self.samplenames.len() as f64; // `S` in the suppl
 
-        assert!(fingerprint.len()==self.samplenames.len());
+        assert!(fingerprint.len()==self.samplenames.len()); 
 
-        let r = AmpFactor(fingerprint.iter().sum());
+        let r = AmpFactor(fingerprint.iter().sum()); // `r`
 
         let mut logposterior: Vec<f64> = Vec::with_capacity(self.samplenames.len());
+        // essentially: fingerprint * log(factor) + log(conditional[r])
+
         let logbase = (n_samples-1.0).ln() - ((1.0/ self.p_no_hop) -1.0).ln();
         for (sname, y) in izip![self.samplenames.iter(), fingerprint.iter() ]{
 
@@ -219,13 +221,15 @@ impl PhantomPosterior{
         output_busfolders: &HashMap<String, String>,
         output_removed: &HashMap<String, String>,
         output_ambiguous: &HashMap<String, String>,
-        posterior_threshold: f64
+        posterior_threshold: f64,
+        t2g_file: &str
     ){
         // create the EC2gene mappers
-        let ecmapper_dict = input_busfolders.iter()
-        .map(|(samplename, bfolder)|
-            (samplename.clone(), &bfolder.ec2gene)   //#todo remove clone
-        ).collect();
+        // silly, cant create one where ECMapper is a reference
+        // need to instantiate/own it, then create ref
+        let ec_tmp = ec_mapper_dict_from_busfolders(&input_busfolders, t2g_file );
+        let ecmapper_dict: HashMap<String, &Ec2GeneMapper> = ec_tmp.iter().map(|(name, d)| (name.clone(), d )).collect();
+
 
         // a list of busfile-names for the iterator
         // let busnames = valmap(|bfolder| bfolder.get_busfile(), input_busfolders);
@@ -241,7 +245,7 @@ impl PhantomPosterior{
                     sname.to_owned(), 
                     BusWriter::new(
                         fname, 
-                        input_busfolders.get(sname).unwrap().get_bus_header()
+                        input_busfolders.get(sname).unwrap().get_bus_params()
                     )
                 ) 
             )
@@ -253,7 +257,7 @@ impl PhantomPosterior{
                     sname.to_owned(), 
                     BusWriter::new(
                         fname, 
-                        input_busfolders.get(sname).unwrap().get_bus_header()
+                        input_busfolders.get(sname).unwrap().get_bus_params()
                     )
                 ) 
             )
@@ -265,26 +269,21 @@ impl PhantomPosterior{
                     sname.to_owned(), 
                     BusWriter::new(
                         fname, 
-                        input_busfolders.get(sname).unwrap().get_bus_header()
+                        input_busfolders.get(sname).unwrap().get_bus_params()
                     )
                 ) 
             )
             .collect();
 
-        // figure out size of iterators, just for progress bar!
-        let cbumi_per_file = valmap_ref(
+        let bar = get_spinner();
+
+        let iterators = valmap_ref(
             |busfile|{
-            println!("determine size of iterator {busfile}");
-                BusReader::new(busfile).groupby_cbumi().count()
+                BusReader::new(busfile).groupby_cbumi()
             },
             &busnames);
-        
-        let total:usize = cbumi_per_file.values().sum(); // worst case scenario where there's no overlap entirely!
-        println!("total records {:?}", cbumi_per_file);
 
-        let bar = get_progressbar(total as u64);
-
-        let multi_iter = CellUmiIteratorMulti::new(&busnames);
+        let multi_iter = MultiIterator::new(iterators);
         let mut records_resolved = 0;
         let mut records_ambiguous = 0;
         let mut records_total = 0;
@@ -418,20 +417,109 @@ impl PhantomPosterior{
     } 
 }   
 
+use std::io::Write;
+fn map_to_file(h: &HashMap<(AmpFactor, String), f64>, outfile: &str) {
+    let mut amp: Vec<AmpFactor> = h.keys().map(|(r, _s)| *r).unique().collect();
+    let mut samplenames: Vec<String> = h.keys().map(|(_r, s)| s.to_owned()).unique().collect();
+
+    amp.sort();
+    samplenames.sort();
+
+    let mut fh = File::create(outfile).unwrap();
+    let mut header = "samplename,".to_string();
+    let rstring = amp
+        .iter()
+        .map(|x| x.0.to_string())
+        .collect::<Vec<String>>()
+        .join(",");
+    header.push_str(&rstring);
+    header.push_str(",frequency");
+
+    writeln!(fh, "{}", header).unwrap();
+
+    for s in samplenames {
+        let pi_vec: Vec<String> = amp
+            .iter()
+            .map(|r| h.get(&(*r, s.clone())).unwrap().to_string())
+            .collect();
+        writeln!(fh, "{},{}", s, pi_vec.join(",")).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod testing{
+    use insta;
     use super::*;
     // use std::collections::HashMap;
     use bustools::io::{BusRecord, BusFolder, setup_busfile};
     use crate::{posterior::PhantomPosterior, phantompurger::{create_dummy_ec, make_fingerprint_histogram}};
 
-    // #[test]
-    // fn test_posterior(){
-    //     let fph = FingerprintHistogram::from_csv("/home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv");
-    //     let posterior = PhantomPosterior::new(&fph);
-    //     map_to_file(&posterior.pi_norm, "/tmp/pi_norm.csv");
-    //     map_to_file(&posterior.vr_norm, "/tmp/vr_norm.csv");
-    // }
+    #[test]
+    fn test_posterior_pinorm(){
+        let fph = FingerprintHistogram::from_csv("/home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv");
+        let posterior = PhantomPosterior::new(&fph);
+        map_to_file(&posterior.pi_norm, "/tmp/pi_norm.csv");
+        // map_to_file(&posterior.vr_norm, "/tmp/vr_norm.csv");
+
+        let mut settings = insta::Settings::clone_current();
+        settings.set_sort_maps(true);
+        settings.bind(|| {
+            // runs the assertion with the changed settings enabled
+            insta::assert_yaml_snapshot!(posterior.pi_norm);
+        });
+    }
+
+    #[test]
+    fn test_posterior2(){
+        let fph = FingerprintHistogram::from_csv("/home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv");
+        let posterior = PhantomPosterior::new(&fph);
+        
+        // check that the SIHR is still the same
+        // deprecated, already testing in phnatompruger.rs
+        let SIHR = 1.0-posterior.p_no_hop;
+        insta::assert_yaml_snapshot!(SIHR, @r###"
+        ---
+        0.0016278754068794754
+        "###);
+
+        let fp: HashMap<String, u32> = vec![
+            ("DT75-HL60".to_string(), 1_u32),
+            ("DT75-day2".to_string(), 0_u32),
+            ("DT75-day3".to_string(), 0_u32),
+            ("DT76-HL60".to_string(), 0_u32),
+            ("DT76-day1".to_string(), 0_u32),
+            ("DT76-day2".to_string(), 0_u32),
+            ("DT76-day3".to_string(), 0_u32),
+        ].into_iter().collect();
+
+        let post = posterior.posterior(fp);
+        // map_to_file(&posterior.vr_norm, "/tmp/vr_norm.csv");
+
+
+        let fp2: HashMap<String, u32> = vec![
+            ("DT75-HL60".to_string(), 1_u32),
+            ("DT75-day2".to_string(), 0_u32),
+            ("DT75-day3".to_string(), 1_u32),
+            ("DT76-HL60".to_string(), 0_u32),
+            ("DT76-day1".to_string(), 0_u32),
+            ("DT76-day2".to_string(), 0_u32),
+            ("DT76-day3".to_string(), 0_u32),
+        ].into_iter().collect();
+        let post2 = posterior.posterior(fp2);
+
+        // need to enforce hashmap sorting! otherwise the resulting Hashmap (Even if same)
+        // will differ from the snapshot on disk
+        let mut settings = insta::Settings::clone_current();
+        settings.set_sort_maps(true);
+        settings.bind(|| {
+            // runs the assertion with the changed settings enabled
+            insta::assert_yaml_snapshot!("posterior_test1", post);
+            insta::assert_yaml_snapshot!("posterior_test2", post2);
+        });
+
+    }
+
+    /*
     #[test]
     fn test_filter(){
 
@@ -510,7 +598,6 @@ mod testing{
         // println!("============================");
         // rustbustools_cli::inspect::inspect("/tmp/s3_filtered.bus");
 
-
     }
 
     #[test]
@@ -579,4 +666,5 @@ mod testing{
         // let mut cbumi_counter: HashMap<String, usize> = HashMap::new();
 
     }
+    */
 }
