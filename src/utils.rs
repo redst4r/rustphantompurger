@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bustools::{consistent_genes::Ec2GeneMapper, io::BusFolder};
 
-pub fn ec_mapper_dict_from_busfolders(busfolders: &HashMap<String, BusFolder>, t2g_file: &str) ->  HashMap<String, Ec2GeneMapper> {
+pub (crate) fn ec_mapper_dict_from_busfolders(busfolders: &HashMap<String, BusFolder>, t2g_file: &str) ->  HashMap<String, Ec2GeneMapper> {
 
         // create the EC2gene mappers
         let mut ecmapper_dict_tmp = HashMap::new();
@@ -14,7 +14,7 @@ pub fn ec_mapper_dict_from_busfolders(busfolders: &HashMap<String, BusFolder>, t
 }
 
 
-pub fn logsumexp(x: &[f64]) -> f64 {
+pub (crate) fn logsumexp(x: &[f64]) -> f64 {
     // logsumexp trick
 
     // getting the max, stupid f64, cant do .iter().max()
@@ -101,7 +101,7 @@ fn test_valmap() {
 
 // }
 
-pub fn linspace(min: f64, max: f64, n: usize) -> Vec<f64> {
+pub (crate) fn linspace(min: f64, max: f64, n: usize) -> Vec<f64> {
     assert!(n >= 2);
     let delta = (max - min) / ((n - 1) as f64);
     let mut x = Vec::with_capacity(n);
@@ -112,22 +112,11 @@ pub fn linspace(min: f64, max: f64, n: usize) -> Vec<f64> {
     x
 }
 
-pub fn logspace(logmin: f64, logmax: f64, n: usize) -> Vec<f64> {
+pub (crate) fn logspace(logmin: f64, logmax: f64, n: usize) -> Vec<f64> {
     let logx = linspace(logmin, logmax, n);
     logx.into_iter().map(|y| 10_f64.powf(y)).collect()
 }
 
-
-pub (crate) fn get_spinner() -> indicatif::ProgressBar{
-    let bar = indicatif::ProgressBar::new_spinner();
-    bar.set_style(
-        indicatif::ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {pos} {per_sec}")
-            .unwrap()
-            .progress_chars("##-"),
-    );
-    bar
-}
 
 
 #[cfg(test)]

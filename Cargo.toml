@@ -8,12 +8,12 @@ edition = "2021"
 [dependencies]
 indicatif = "0.17"
 clap = { version = "4", features = ["derive"] }
-statrs = "0.16"
-itertools="0.12.1"
-bustools = { path = "/home/michi/Dropbox/rustbustools" }
-# bustools ="0.11.0"
+statrs = "0.17"
+itertools="0.13"
+# bustools = { path = "/home/michi/Dropbox/rustbustools" }
+bustools ="0.14"
 flate2 = "1"
 serde = "1"
 
 [dev-dependencies]
-insta = { version = "1.34.0", features = ["yaml"] }
+insta = { version = "1.39", features = ["yaml", "redactions"] }

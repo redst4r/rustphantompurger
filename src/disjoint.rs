@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     hash::Hash,
 };
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 fn set_overlap<T: Hash + Eq>(aset: &HashSet<T>, bset: &HashSet<T>) -> bool {
     for el in aset {
@@ -87,13 +87,16 @@ impl<T: Hash + Eq> DisjointSubsets<T> {
     }
 }
 
-fn vec2set<T: Eq + Hash>(x: Vec<T>) -> HashSet<T> {
-    x.into_iter().collect::<HashSet<T>>()
-}
+
 
 #[cfg(test)]
 mod test {
-    use super::vec2set;
+    use super::*;
+    fn vec2set<T: Eq + Hash>(x: Vec<T>) -> HashSet<T> {
+        x.into_iter().collect::<HashSet<T>>()
+    }
+
+    // use super::vec2set;
 
     use crate::disjoint::DisjointSubsets;
     use std::collections::{HashMap, HashSet};

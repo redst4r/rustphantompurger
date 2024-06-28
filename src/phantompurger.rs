@@ -1,13 +1,15 @@
 use crate::disjoint::DisjointSubsets;
-use crate::utils::{ec_mapper_dict_from_busfolders, get_spinner};
+use crate::utils::ec_mapper_dict_from_busfolders;
 use crate::binomialreg::phantom_binomial_regression;
 use bustools::consistent_genes::Ec2GeneMapper;
 use bustools::io::{BusFolder, BusRecord};
 use bustools::merger::MultiIterator;
+use bustools::utils::get_spinner;
 use bustools::{
     consistent_genes::{GeneId, Genename, EC},
     iterators::CbUmiGroupIterator,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -28,7 +30,7 @@ pub struct FingerprintHistogram {
     pub(crate) histogram: HashMap<Vec<u32>, usize>,
 }
 
-#[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug, Copy)]
+#[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug, Copy, Deserialize, Serialize)]
 pub struct AmpFactor(u32);
 
 impl FingerprintHistogram {
@@ -126,14 +128,14 @@ impl FingerprintHistogram {
 
 
     /// get the number of non-chimeric molecules as a function of r
-    fn get_z_r(&self) -> HashMap<usize, usize>{
-        let mut z_r: HashMap<usize, usize> = HashMap::new();
+    fn get_z_r(&self) -> HashMap<AmpFactor, usize>{
+        let mut z_r: HashMap<AmpFactor, usize> = HashMap::new();
 
         for (fingerprint, freq) in self.histogram.iter() {
-            let r = fingerprint.iter().map(|x| *x as usize).sum();
+            let r: usize = fingerprint.iter().map(|x| *x as usize).sum();
             let n_experiments = fingerprint.iter().filter(|x| **x > 0).count();
             if n_experiments == 1 {
-                let v = z_r.entry(r).or_insert(0);
+                let v = z_r.entry(AmpFactor(r as u32)).or_insert(0);
                 *v += freq;
             }
         }      
@@ -141,12 +143,12 @@ impl FingerprintHistogram {
     }
 
     /// get the number of total molecules as a function of r
-    fn get_m_r(&self) -> HashMap<usize, usize>{
+    fn get_m_r(&self) -> HashMap<AmpFactor, usize>{
 
-        let mut m_r: HashMap<usize, usize> = HashMap::new();
+        let mut m_r: HashMap<AmpFactor, usize> = HashMap::new();
         for (fingerprint, freq) in self.histogram.iter() {
-            let r = fingerprint.iter().map(|x| *x as usize).sum();
-            let v = m_r.entry(r).or_insert(0);
+            let r: usize = fingerprint.iter().map(|x| *x as usize).sum();
+            let v = m_r.entry(AmpFactor(r as u32)).or_insert(0);
             *v += freq;
         }
         m_r
@@ -162,14 +164,15 @@ impl FingerprintHistogram {
         let z_r = self.get_z_r();
         let m_r = self.get_m_r();
 
-        let mut r: Vec<usize> = m_r.keys().map(|k| k.to_owned()).collect();
+        let mut r: Vec<AmpFactor> = m_r.keys().map(|k| k.to_owned()).collect();
         r.sort();
 
         let z: Vec<usize> = r.iter().map(|x| *z_r.get(x).unwrap_or(&0)).collect(); // in case there's not a single non-chimeric molecule at amplification r, return 0
         let m: Vec<usize> = r.iter().map(|x| *m_r.get(x).unwrap()).collect();
 
+        let r_usize: Vec<_> = r.iter().map(|x| x.0 as usize).collect(); // convert from AmpFactor -> usize
         let (pmax, _prange, _loglike_range) =
-            phantom_binomial_regression(&z, &m, &r, self.samplenames.len());
+            phantom_binomial_regression(&z, &m, &r_usize, self.samplenames.len());
 
         // let mut fh = File::create("/tmp/phat.csv").unwrap();
         // writeln!(fh, "p,logp").unwrap();
@@ -239,7 +242,7 @@ pub fn groupby_gene_across_samples(
         let mut sample_grouped_aggr: HashMap<String, BusRecord> = HashMap::new();
         for (s, recordlist) in sample_grouped.iter() {
             let freq = recordlist.iter().map(|r| r.COUNT).sum();
-            let mut rnew = recordlist.get(0).unwrap().clone();
+            let mut rnew = recordlist.first().unwrap().clone();
             rnew.COUNT = freq;
 
             // bad idea here: this turns the BusRecord into something not quantifiable by bustools!!
@@ -599,6 +602,4 @@ pub mod tests {
             insta::assert_yaml_snapshot!(m_r);
         });
     }
-
-
 }
