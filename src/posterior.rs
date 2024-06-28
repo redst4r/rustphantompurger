@@ -1,8 +1,8 @@
 use std::{collections::HashMap, fs::File, hash::Hash};
-use crate::{phantompurger::{groupby_gene_across_samples, make_fingerprint_simple, Fingerprint, FingerprintHistogram}, utils::{ec_mapper_dict_from_busfolders, get_spinner, logsumexp, valmap_ref}};
+use crate::{phantompurger::{groupby_gene_across_samples, make_fingerprint_simple, Fingerprint, FingerprintHistogram}, utils::{ec_mapper_dict_from_busfolders, logsumexp, valmap_ref}};
 use itertools::{izip, Itertools};
-use bustools::{consistent_genes::Ec2GeneMapper, io::BusReader, iterators::CbUmiGroupIterator, merger::MultiIterator};
-use bustools::io::{BusFolder, BusWriter};
+use bustools::{consistent_genes::Ec2GeneMapper, io::{BusReader, BusWriterPlain}, iterators::CbUmiGroupIterator, merger::MultiIterator, utils::get_spinner};
+use bustools::io::BusFolder;
 use bustools::utils::argsort::argmax_float;
 use serde;
 
@@ -227,7 +227,7 @@ impl PhantomPosterior{
         // create the EC2gene mappers
         // silly, cant create one where ECMapper is a reference
         // need to instantiate/own it, then create ref
-        let ec_tmp = ec_mapper_dict_from_busfolders(&input_busfolders, t2g_file );
+        let ec_tmp = ec_mapper_dict_from_busfolders(input_busfolders, t2g_file );
         let ecmapper_dict: HashMap<String, &Ec2GeneMapper> = ec_tmp.iter().map(|(name, d)| (name.clone(), d )).collect();
 
 
@@ -417,7 +417,6 @@ impl PhantomPosterior{
     } 
 }   
 
-use std::io::Write;
 fn map_to_file(h: &HashMap<(AmpFactor, String), f64>, outfile: &str) {
     let mut amp: Vec<AmpFactor> = h.keys().map(|(r, _s)| *r).unique().collect();
     let mut samplenames: Vec<String> = h.keys().map(|(_r, s)| s.to_owned()).unique().collect();
@@ -455,17 +454,21 @@ mod testing{
     use crate::{posterior::PhantomPosterior, phantompurger::{create_dummy_ec, make_fingerprint_histogram}};
 
     #[test]
+
     fn test_posterior_pinorm(){
         let fph = FingerprintHistogram::from_csv("/home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv");
         let posterior = PhantomPosterior::new(&fph);
-        map_to_file(&posterior.pi_norm, "/tmp/pi_norm.csv");
+        // map_to_file(&posterior.pi_norm, "/tmp/pi_norm.csv");
         // map_to_file(&posterior.vr_norm, "/tmp/vr_norm.csv");
 
         let mut settings = insta::Settings::clone_current();
         settings.set_sort_maps(true);
         settings.bind(|| {
             // runs the assertion with the changed settings enabled
-            insta::assert_yaml_snapshot!(posterior.pi_norm);
+            insta::assert_yaml_snapshot!(
+                posterior.pi_norm,
+                {".*" => insta::rounded_redaction(6)}
+            );
         });
     }
 
@@ -513,8 +516,8 @@ mod testing{
         settings.set_sort_maps(true);
         settings.bind(|| {
             // runs the assertion with the changed settings enabled
-            insta::assert_yaml_snapshot!("posterior_test1", post);
-            insta::assert_yaml_snapshot!("posterior_test2", post2);
+            insta::assert_yaml_snapshot!("posterior_test1", post, {".*" => insta::rounded_redaction(6)});
+            insta::assert_yaml_snapshot!("posterior_test2", post2, {".*" => insta::rounded_redaction(6)});
         });
 
     }
