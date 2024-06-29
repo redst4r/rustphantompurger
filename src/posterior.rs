@@ -461,15 +461,13 @@ mod testing{
         // map_to_file(&posterior.pi_norm, "/tmp/pi_norm.csv");
         // map_to_file(&posterior.vr_norm, "/tmp/vr_norm.csv");
 
-        let mut settings = insta::Settings::clone_current();
-        settings.set_sort_maps(true);
-        settings.bind(|| {
-            // runs the assertion with the changed settings enabled
+        insta::with_settings!({sort_maps => true}, {
             insta::assert_yaml_snapshot!(
                 posterior.pi_norm,
                 {".*" => insta::rounded_redaction(6)}
             );
-        });
+        });  
+
     }
 
     #[test]
@@ -512,14 +510,10 @@ mod testing{
 
         // need to enforce hashmap sorting! otherwise the resulting Hashmap (Even if same)
         // will differ from the snapshot on disk
-        let mut settings = insta::Settings::clone_current();
-        settings.set_sort_maps(true);
-        settings.bind(|| {
-            // runs the assertion with the changed settings enabled
+        insta::with_settings!({sort_maps => true}, {
             insta::assert_yaml_snapshot!("posterior_test1", post, {".*" => insta::rounded_redaction(6)});
             insta::assert_yaml_snapshot!("posterior_test2", post2, {".*" => insta::rounded_redaction(6)});
-        });
-
+        });  
     }
 
     /*

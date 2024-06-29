@@ -579,12 +579,9 @@ pub mod tests {
         
         // need to enforce hashmap sorting! otherwise the resulting Hashmap (Even if same)
         // will differ from the snapshot on disk
-        let mut settings = insta::Settings::clone_current();
-        settings.set_sort_maps(true);
-        settings.bind(|| {
-            // runs the assertion with the changed settings enabled
+        insta::with_settings!({sort_maps => true}, {
             insta::assert_yaml_snapshot!(z_r);
-        });
+        });        
     }
 
     #[test]
@@ -595,10 +592,7 @@ pub mod tests {
         
         // need to enforce hashmap sorting! otherwise the resulting Hashmap (Even if same)
         // will differ from the snapshot on disk
-        let mut settings = insta::Settings::clone_current();
-        settings.set_sort_maps(true);
-        settings.bind(|| {
-            // runs the assertion with the changed settings enabled
+        insta::with_settings!({sort_maps => true}, {
             insta::assert_yaml_snapshot!(m_r);
         });
     }
