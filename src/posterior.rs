@@ -5,6 +5,7 @@ use bustools::{consistent_genes::Ec2GeneMapper, io::{BusReader, BusWriterPlain},
 use bustools::io::BusFolder;
 use bustools::utils::argsort::argmax_float;
 use serde;
+use std::io::Write;
 
 #[derive(Eq, PartialEq, Hash, Ord, PartialOrd, Clone, Debug, Copy, serde::Serialize)]
 pub struct AmpFactor(u32);
@@ -239,11 +240,11 @@ impl PhantomPosterior{
             .map(|(s, bfolder)| (s.clone(), bfolder.get_busfile()))
             .collect();
     
-        let mut buswriters: HashMap<String,BusWriter> = output_busfolders.iter()
+        let mut buswriters: HashMap<String,BusWriterPlain> = output_busfolders.iter()
             .map(|(sname, fname)| 
                 (
                     sname.to_owned(), 
-                    BusWriter::new(
+                    BusWriterPlain::new(
                         fname, 
                         input_busfolders.get(sname).unwrap().get_bus_params()
                     )
@@ -251,11 +252,11 @@ impl PhantomPosterior{
             )
             .collect();
 
-        let mut buswriters_removed: HashMap<String,BusWriter> = output_removed.iter()
+        let mut buswriters_removed: HashMap<String,BusWriterPlain> = output_removed.iter()
             .map(|(sname, fname)| 
                 (
                     sname.to_owned(), 
-                    BusWriter::new(
+                    BusWriterPlain::new(
                         fname, 
                         input_busfolders.get(sname).unwrap().get_bus_params()
                     )
@@ -263,11 +264,11 @@ impl PhantomPosterior{
             )
             .collect();
 
-        let mut buswriters_ambigous: HashMap<String,BusWriter> = output_ambiguous.iter()
+        let mut buswriters_ambigous: HashMap<String,BusWriterPlain> = output_ambiguous.iter()
             .map(|(sname, fname)| 
                 (
                     sname.to_owned(), 
-                    BusWriter::new(
+                    BusWriterPlain::new(
                         fname, 
                         input_busfolders.get(sname).unwrap().get_bus_params()
                     )
