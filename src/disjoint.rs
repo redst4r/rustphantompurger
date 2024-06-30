@@ -131,7 +131,7 @@ mod test {
             vec2set(disjoint_setids[1].clone())
         ]);
         assert_eq!(exp, obs);*/
-        assert_eq!(disjoint_setids.len(), 2);       
+        assert_eq!(disjoint_setids.len(), 2);       // {"A", "B", "C"} and {D, E}
 
 
         // add another set, linking the two
@@ -141,8 +141,10 @@ mod test {
         setvalues: {{A, B, C D, E }}
          */
         ds.add("set3".to_string(), c);
-        println!("{:?}", ds);
-        assert_eq!(disjoint_setids.len(), 3);       
+        println!("AAA {:?}", ds);
+
+        let disjoint_setids = ds.get_disjoint_set_ids();
+        assert_eq!(disjoint_setids.len(), 1);       
         assert_eq!(
             vec2set(disjoint_setids[0].clone()),
             vec2set(vec!["set1".to_string(), "set2".to_string(), "set3".to_string()])
