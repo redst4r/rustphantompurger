@@ -449,13 +449,10 @@ fn map_to_file(h: &HashMap<(AmpFactor, String), f64>, outfile: &str) {
 #[cfg(test)]
 mod testing{
     use insta;
-    use super::*;
-    // use std::collections::HashMap;
-    use bustools::io::{BusRecord, BusFolder, setup_busfile};
-    use crate::{posterior::PhantomPosterior, phantompurger::{create_dummy_ec, make_fingerprint_histogram}};
+    use super::*;    
+    use crate::posterior::PhantomPosterior;
 
     #[test]
-
     fn test_posterior_pinorm(){
         let fph = FingerprintHistogram::from_csv("/home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv");
         let posterior = PhantomPosterior::new(&fph);
@@ -478,8 +475,8 @@ mod testing{
         
         // check that the SIHR is still the same
         // deprecated, already testing in phnatompruger.rs
-        let SIHR = 1.0-posterior.p_no_hop;
-        insta::assert_yaml_snapshot!(SIHR, @r###"
+        let sihr = 1.0-posterior.p_no_hop;
+        insta::assert_yaml_snapshot!(sihr, @r###"
         ---
         0.0016278754068794754
         "###);

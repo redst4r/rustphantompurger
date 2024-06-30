@@ -1,22 +1,14 @@
 use std::collections::HashMap;
-
 use bustools::{consistent_genes::Ec2GeneMapper, io::BusFolder};
 
+/// creates a Mapper for each BusFolder in the dictionalry
 pub (crate) fn ec_mapper_dict_from_busfolders(busfolders: &HashMap<String, BusFolder>, t2g_file: &str) ->  HashMap<String, Ec2GeneMapper> {
-
-        // create the EC2gene mappers
-        let mut ecmapper_dict_tmp = HashMap::new();
-        for (samplename, bfolder) in busfolders.iter(){
-            let ecmapper = bfolder.make_mapper(t2g_file);
-            ecmapper_dict_tmp.insert(samplename.clone(), ecmapper);
-        }
-        ecmapper_dict_tmp
+        valmap_ref(|b| b.make_mapper(t2g_file), busfolders)
 }
 
 
+/// logsumexp trick
 pub (crate) fn logsumexp(x: &[f64]) -> f64 {
-    // logsumexp trick
-
     // getting the max, stupid f64, cant do .iter().max()
     let c = x.iter().reduce(|a, b| if a > b { a } else { b }).unwrap();
     let mut exp_vec: Vec<f64> = Vec::with_capacity(x.len()); // storing exp(x-c)
@@ -38,6 +30,7 @@ where
     r
 }
 
+/// same as `valmap`, except it doesnt consume the map. Clones the key!
 pub fn valmap_ref<K, V, V2, F>(fun: F, the_map: &HashMap<K, V>) -> HashMap<K, V2>
 where
     F: Fn(&V) -> V2,
