@@ -1181,6 +1181,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "phantompurger-rs"
+version = "0.1.0"
+dependencies = [
+ "bustools",
+ "clap",
+ "flate2",
+ "indicatif",
+ "insta",
+ "itertools",
+ "polars",
+ "serde",
+ "statrs",
+]
+
+[[package]]
 name = "phf"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1877,21 +1892,6 @@ dependencies = [
  "libc",
  "linux-raw-sys",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "rustphantompurger"
-version = "0.1.0"
-dependencies = [
- "bustools",
- "clap",
- "flate2",
- "indicatif",
- "insta",
- "itertools",
- "polars",
- "serde",
- "statrs",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use bustools::io::BusFolder;
-use rustphantompurger::{phantompurger, posterior, utils::{valmap}, cb_overlap};
+use phantompurger_rs::{phantompurger, posterior, utils::{valmap}, cb_overlap};
 use clap::{self, Parser, Subcommand, Args};
 
 #[derive(Parser)]
