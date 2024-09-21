@@ -1,14 +1,18 @@
 use crate::disjoint::DisjointSubsets;
-use crate::utils::ec_mapper_dict_from_busfolders;
+use crate::utils::{ec_mapper_dict_from_busfolders, valmap};
 use crate::binomialreg::phantom_binomial_regression;
 use bustools::consistent_genes::Ec2GeneMapper;
 use bustools::io::{BusFolder, BusRecord};
 use bustools::merger::MultiIterator;
 use bustools::utils::get_spinner;
 use bustools::{
-    consistent_genes::{GeneId, Genename, EC},
+    consistent_genes::{GeneId, EC},
     iterators::CbUmiGroupIterator,
 };
+use itertools::izip;
+use polars::io::SerWriter;
+use polars::prelude::NamedFrom;
+use polars::series::Series;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -107,6 +111,30 @@ impl FingerprintHistogram {
         }
     }
 
+    /// turn the fingerprint histgram into a polars Dataframe
+    pub fn to_dataframe(&self) -> polars::frame::DataFrame {
+        // each column is a different experiment
+        // each row is a differnet fingerprint
+        let mut columns:HashMap<String, Vec<u32>> = HashMap::new();
+
+        // we're more or less transposing, working through the rows, building the columns
+        for (fingerprint, freq) in self.histogram.iter() {
+            assert_eq!(fingerprint.len(), self.samplenames.len());
+            for (s, fp) in izip!(&self.samplenames, fingerprint) {
+                let v = columns.entry(s.to_string()).or_default();
+                v.push(*fp)
+            }
+            let v= columns.entry("frequency".to_owned()).or_default();
+            v.push(*freq as u32)
+        }   
+
+        let mut series = Vec::new();
+        for (name, values) in columns {
+            series.push(Series::new(&name, values))
+        }
+        polars::frame::DataFrame::new(series).unwrap()
+    }
+
     /// save the histogram to disk
     pub fn to_csv(&self, outfile: &str) {
         let mut fh = File::create(outfile).expect("Cant create file: {outfile}");
@@ -126,16 +154,22 @@ impl FingerprintHistogram {
         }
     }
 
+    /// save the histogram to disk
+    pub fn to_csv2(&self, outfile: &str) {
+        let mut df = self.to_dataframe();
+        let mut file = std::fs::File::create(outfile).unwrap();
+        polars::prelude::CsvWriter::new(&mut file).finish(&mut df).unwrap();
+    }
 
     /// get the number of non-chimeric molecules as a function of r
     fn get_z_r(&self) -> HashMap<AmpFactor, usize>{
         let mut z_r: HashMap<AmpFactor, usize> = HashMap::new();
 
         for (fingerprint, freq) in self.histogram.iter() {
-            let r: usize = fingerprint.iter().map(|x| *x as usize).sum();
+            let r: AmpFactor = AmpFactor(fingerprint.iter().sum());
             let n_experiments = fingerprint.iter().filter(|x| **x > 0).count();
             if n_experiments == 1 {
-                let v = z_r.entry(AmpFactor(r as u32)).or_insert(0);
+                let v = z_r.entry(r).or_insert(0);
                 *v += freq;
             }
         }      
@@ -147,8 +181,8 @@ impl FingerprintHistogram {
 
         let mut m_r: HashMap<AmpFactor, usize> = HashMap::new();
         for (fingerprint, freq) in self.histogram.iter() {
-            let r: usize = fingerprint.iter().map(|x| *x as usize).sum();
-            let v = m_r.entry(AmpFactor(r as u32)).or_insert(0);
+            let r: AmpFactor = AmpFactor(fingerprint.iter().sum());
+            let v = m_r.entry(r).or_insert(0);
             *v += freq;
         }
         m_r
@@ -291,7 +325,6 @@ fn _make_fingerprint_histogram(
     let iterators = busfolders.iter().map(|(k,v)| (k.clone(), v.get_iterator().groupby_cbumi())).collect();
     let multi_iter = MultiIterator::new(iterators);
 
-    // let bar = get_progressbar(total as u64);
     let bar = get_spinner();
     
     let mut order: Vec<_> = busfolders.keys().cloned().collect();
@@ -322,36 +355,31 @@ pub fn make_fingerprint_simple(record_dict: &HashMap<String, BusRecord>) -> Fing
     fingerprint
 }
 
-pub fn create_dummy_ec() -> Ec2GeneMapper {
-    let ec0: HashSet<Genename> = vec![Genename("A".to_string())].into_iter().collect();
-    let ec1: HashSet<Genename> = vec![Genename("B".to_string())].into_iter().collect();
-    let ec2: HashSet<Genename> = vec![Genename("A".to_string()), Genename("B".to_string())].into_iter().collect();
-    let ec3: HashSet<Genename> = vec![Genename("C".to_string()), Genename("D".to_string())].into_iter().collect();
-
-    let ec_dict: HashMap<EC, HashSet<Genename>> = HashMap::from([
-        (EC(0), ec0), // A
-        (EC(1), ec1), // B
-        (EC(2), ec2), // A,B
-        (EC(3), ec3), // C,D
-    ]);
-    Ec2GeneMapper::new(ec_dict)
-}
-
 #[cfg(test)]
 pub mod tests {
-    use crate::phantompurger::create_dummy_ec;
     use bustools::{
-        consistent_genes::Ec2GeneMapper,
+        consistent_genes::{Ec2GeneMapper, Genename},
         io::{BusFolder, BusRecord},
     };
+    use polars::io::SerWriter;
     use statrs::assert_almost_eq;
     use std::collections::HashMap;
+    use super::*;
 
-    use super::{
-        _make_fingerprint_histogram, groupby_gene_across_samples, make_fingerprint_simple,
-        FingerprintHistogram,
-    };
-    use super::make_fingerprint_histogram;
+    fn create_dummy_ec() -> Ec2GeneMapper {
+        let ec0: HashSet<Genename> = vec![Genename("A".to_string())].into_iter().collect();
+        let ec1: HashSet<Genename> = vec![Genename("B".to_string())].into_iter().collect();
+        let ec2: HashSet<Genename> = vec![Genename("A".to_string()), Genename("B".to_string())].into_iter().collect();
+        let ec3: HashSet<Genename> = vec![Genename("C".to_string()), Genename("D".to_string())].into_iter().collect();
+    
+        let ec_dict: HashMap<EC, HashSet<Genename>> = HashMap::from([
+            (EC(0), ec0), // A
+            (EC(1), ec1), // B
+            (EC(2), ec2), // A,B
+            (EC(3), ec3), // C,D
+        ]);
+        Ec2GeneMapper::new(ec_dict)
+    }
 
     #[test]
     fn test_groupby_gene_across_samples() {
@@ -490,23 +518,14 @@ pub mod tests {
     // #[test]
     pub fn testing2() {
         let t2g = "/home/michi/bus_testing/transcripts_to_genes.txt";
-        // let b1 = BusFolder::new("/home/michi/bus_testing/bus_output/", t2g);
         let b1 = BusFolder::new("/home/michi/bus_testing/bus_output_short/");
         let b2 = BusFolder::new("/home/michi/bus_testing/bus_output_short/");
-
-        // let hashmap = HashMap::from([
-        //     ("full".to_string(), "/home/michi/bus_testing/bus_output/output.corrected.sort.bus".to_string()),
-        //     ("short".to_string(), "/home/michi/bus_testing/bus_output_short/output.corrected.sort.bus".to_string())
-        // ]);
         let hashmap = HashMap::from([("full".to_string(), b1), ("short".to_string(), b2)]);
-
         let s = make_fingerprint_histogram(hashmap, t2g);
 
         s.to_csv("/tmp/testing2.csv");
         println!("{:?}", s)
     }
-
-
 
     #[test]
     pub fn test_csv_read_write() {
@@ -525,7 +544,7 @@ pub mod tests {
             histogram,
         };
 
-        fph.to_csv("/tmp/finger.csv");
+        // fph.to_csv("/tmp/finger.csv");
 
         println!("{:?}", fph);
         let t = FingerprintHistogram::from_csv("/tmp/finger.csv");
@@ -595,5 +614,14 @@ pub mod tests {
         insta::with_settings!({sort_maps => true}, {
             insta::assert_yaml_snapshot!(m_r);
         });
+    }
+
+    #[test]
+    fn test_to_dataframe() {
+        let fph = FingerprintHistogram::from_csv("/home/michi/Dropbox/rustphantompurger/IR56_57_phantom.csv");
+        let mut df = fph.to_dataframe();
+
+        let mut file = std::fs::File::create("/tmp/path.csv").unwrap();
+        polars::prelude::CsvWriter::new(&mut file).finish(&mut df).unwrap();
     }
 }

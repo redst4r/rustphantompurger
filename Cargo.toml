@@ -14,6 +14,7 @@ itertools="0.13"
 bustools ="0.14"
 flate2 = "1"
 serde = "1"
+polars = "0.41"
 
 [dev-dependencies]
 insta = { version = "1.39", features = ["yaml", "redactions"] }

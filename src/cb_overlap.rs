@@ -79,47 +79,16 @@ pub fn detect_cell_overlap(busfolders: &HashMap<String, String>, outfile: &str) 
         }
     }
 
-
     if outfile.ends_with(".csv") {
         // write to file
         // TODO could be inlined into the above code to instantly write
         let fh = File::create(outfile).unwrap();
         results_to_writer(fh, result, samplenames);
-
-        // let mut header = samplenames.join(",");
-        // header.push_str(",CB");
-        // writeln!(fh, "{}", header).unwrap();
-
-        // for (cid, numis) in result.iter() {
-        //     // concat with commas
-        //     let mut s = numis
-        //         .iter()
-        //         .map(|i| i.to_string())
-        //         .collect::<Vec<String>>()
-        //         .join(",");
-        //     s.push_str(&format!(",{}", cid.0));
-        //     writeln!(fh, "{}", s).unwrap();
-        // }
     } else if outfile.ends_with(".csv.gz") {
         // write compressed
-        let fh = File::create(format!("{outfile}.gz")).unwrap();
+        let fh = File::create(outfile).unwrap();
         let e = GzEncoder::new(fh, Compression::default());
         results_to_writer(e, result, samplenames);
-
-
-        // let mut header = samplenames.join(",");
-        // header.push_str(",CB\n");
-        // e.write_all(header.as_bytes()).unwrap();
-        // for (cid, numis) in result.iter() {
-        //     // concat with commas
-        //     let mut s = numis
-        //         .iter()
-        //         .map(|i| i.to_string())
-        //         .collect::<Vec<String>>()
-        //         .join(",");
-        //     s.push_str(&format!(",{}\n", cid.0));
-        //     e.write_all(s.as_bytes()).unwrap();
-        // }
     } else {
         panic!("unknwon file extension. must be either .csv or .csv.gz")
     }
