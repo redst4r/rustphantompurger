@@ -10,7 +10,6 @@ indicatif = "0.17"
 clap = { version = "4", features = ["derive"] }
 statrs = "0.17"
 itertools="0.13"
-# bustools = { path = "/home/michi/Dropbox/rustbustools" }
 bustools ="0.14"
 flate2 = "1"
 serde = "1"
